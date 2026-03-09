@@ -1,3 +1,4 @@
+#include <BluetoothHIDManager.h>
 #include "KOReaderAuthActivity.h"
 
 #include <GfxRenderer.h>
@@ -9,11 +10,10 @@
 #include "MappedInputManager.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
+
 #include "fontIds.h"
 
 void KOReaderAuthActivity::onWifiSelectionComplete(const bool success) {
-  exitActivity();
-
   if (!success) {
     {
       RenderLock lock(*this);
@@ -51,47 +51,42 @@ void KOReaderAuthActivity::performAuthentication() {
 }
 
 void KOReaderAuthActivity::onEnter() {
-  ActivityWithSubactivity::onEnter();
+  Activity::onEnter();
+
+  // Suspend BLE before WiFi — shared 2.4GHz radio
+  BluetoothHIDManager::getInstance().disable();
 
   // Turn on WiFi
   WiFi.mode(WIFI_STA);
 
   // Check if already connected
   if (WiFi.status() == WL_CONNECTED) {
-    state = AUTHENTICATING;
-    statusMessage = tr(STR_AUTHENTICATING);
-    requestUpdate();
-
-    // Perform authentication in a separate task
-    xTaskCreate(
-        [](void* param) {
-          auto* self = static_cast<KOReaderAuthActivity*>(param);
-          self->performAuthentication();
-          vTaskDelete(nullptr);
-        },
-        "AuthTask", 4096, this, 1, nullptr);
+    onWifiSelectionComplete(true);
     return;
   }
 
   // Launch WiFi selection
-  enterNewActivity(new WifiSelectionActivity(renderer, mappedInput,
-                                             [this](const bool connected) { onWifiSelectionComplete(connected); }));
+  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
+                         [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
 }
 
 void KOReaderAuthActivity::onExit() {
-  ActivityWithSubactivity::onExit();
+  Activity::onExit();
 
   // Turn off wifi
   WiFi.disconnect(false);
   delay(100);
   WiFi.mode(WIFI_OFF);
   delay(100);
+
+  // Resume BLE now that WiFi is off
+  BluetoothHIDManager::getInstance().enable();
 }
 
-void KOReaderAuthActivity::render(Activity::RenderLock&&) {
+void KOReaderAuthActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
-  auto metrics = UITheme::getInstance().getMetrics();
+  const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
@@ -115,15 +110,10 @@ void KOReaderAuthActivity::render(Activity::RenderLock&&) {
 }
 
 void KOReaderAuthActivity::loop() {
-  if (subActivity) {
-    subActivity->loop();
-    return;
-  }
-
   if (state == SUCCESS || state == FAILED) {
     if (mappedInput.wasPressed(MappedInputManager::Button::Back) ||
         mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-      onComplete();
+      finish();
     }
   }
 }

@@ -1,21 +1,27 @@
+#include <BluetoothHIDManager.h>
 #include "WifiSelectionActivity.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <WiFi.h>
+#include <esp_sntp.h>
 
 #include <map>
 
-#include "BluetoothHIDManager.h"
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "WifiCredentialStore.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
+
 void WifiSelectionActivity::onEnter() {
   Activity::onEnter();
+
+  // Suspend BLE — WiFi and BLE share the 2.4GHz radio
+  BluetoothHIDManager::getInstance().disable();
 
   // Load saved WiFi credentials - SD card operations need lock as we use SPI
   // for both
@@ -73,6 +79,9 @@ void WifiSelectionActivity::onEnter() {
 
 void WifiSelectionActivity::onExit() {
   Activity::onExit();
+
+  // Note: BLE resume happens in the parent WiFi-owning activity's onExit,
+  // not here — WiFi may still be active after WifiSelectionActivity exits.
 
   LOG_DBG("WIFI", "Free heap at onExit start: %d bytes", ESP.getFreeHeap());
 
@@ -191,20 +200,20 @@ void WifiSelectionActivity::selectNetwork(const int index) {
     // Show password entry
     state = WifiSelectionState::PASSWORD_ENTRY;
     // Don't allow screen updates while changing activity
-    enterNewActivity(new KeyboardEntryActivity(
-        renderer, mappedInput, tr(STR_ENTER_WIFI_PASSWORD),
-        "",     // No initial text
-        64,     // Max password length
-        false,  // Show password by default (hard keyboard to use)
-        [this](const std::string& text) {
-          enteredPassword = text;
-          exitActivity();
-        },
-        [this] {
-          state = WifiSelectionState::NETWORK_LIST;
-          exitActivity();
-          requestUpdate();
-        }));
+    startActivityForResult(
+        std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_ENTER_WIFI_PASSWORD),
+                                                "",    // No initial text
+                                                64,    // Max password length
+                                                false  // Show password by default (hard keyboard to use)
+                                                ),
+        [this](const ActivityResult& result) {
+          if (result.isCancelled) {
+            state = WifiSelectionState::NETWORK_LIST;
+          } else {
+            enteredPassword = std::get<KeyboardResult>(result.data).text;
+            // state will be updated in next loop iteration
+          }
+        });
   } else {
     // Connect directly for open networks
     attemptConnection();
@@ -217,20 +226,14 @@ void WifiSelectionActivity::attemptConnection() {
   connectedIP.clear();
   connectionError.clear();
   requestUpdate();
-  
-  // CRITICAL: Disable Bluetooth when enabling WiFi
-  // ESP32-C3 cannot have both WiFi and BLE enabled simultaneously
-  try {
-    auto& btMgr = BluetoothHIDManager::getInstance();
-    if (btMgr.isEnabled()) {
-      LOG_INF("WIFI", "Disabling Bluetooth to enable WiFi (mutual exclusion)");
-      btMgr.disable();
-    }
-  } catch (...) {
-    LOG_DBG("WIFI", "Could not access Bluetooth manager");
-  }
 
   WiFi.mode(WIFI_STA);
+
+  // Set hostname so routers show "CrossPoint-Reader-AABBCCDDEEFF" instead of "esp32-XXXXXXXXXXXX"
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  String hostname = "CrossPoint-Reader-" + mac;
+  WiFi.setHostname(hostname.c_str());
 
   if (selectedRequiresPassword && !enteredPassword.empty()) {
     WiFi.begin(selectedSSID.c_str(), enteredPassword.c_str());
@@ -253,6 +256,11 @@ void WifiSelectionActivity::checkConnectionStatus() {
     snprintf(ipStr, sizeof(ipStr), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
     connectedIP = ipStr;
     autoConnecting = false;
+
+    // Start NTP sync so Clock activity shows correct time after WiFi connects
+    if (!esp_sntp_enabled()) {
+      configTime(0, 0, "pool.ntp.org", "time.google.com");
+    }
 
     // Save this as the last connected network - SD card operations need lock as
     // we use SPI for both
@@ -298,11 +306,6 @@ void WifiSelectionActivity::checkConnectionStatus() {
 }
 
 void WifiSelectionActivity::loop() {
-  if (subActivity) {
-    subActivity->loop();
-    return;
-  }
-
   // Check scan progress
   if (state == WifiSelectionState::SCANNING) {
     processWifiScanResults();
@@ -474,17 +477,16 @@ std::string WifiSelectionActivity::getSignalStrengthIndicator(const int32_t rssi
   return "   |";  // Very weak
 }
 
-void WifiSelectionActivity::render(Activity::RenderLock&&) {
+void WifiSelectionActivity::render(RenderLock&&) {
   // Don't render if we're in PASSWORD_ENTRY state - we're just transitioning
   // from the keyboard subactivity back to the main activity
   if (state == WifiSelectionState::PASSWORD_ENTRY) {
-    requestUpdateAndWait();
     return;
   }
 
   renderer.clearScreen();
 
-  auto metrics = UITheme::getInstance().getMetrics();
+  const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
@@ -527,7 +529,7 @@ void WifiSelectionActivity::render(Activity::RenderLock&&) {
 }
 
 void WifiSelectionActivity::renderNetworkList() const {
-  auto metrics = UITheme::getInstance().getMetrics();
+  const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
@@ -699,4 +701,14 @@ void WifiSelectionActivity::renderForgetPrompt() const {
   // Use centralized button hints
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
+
+void WifiSelectionActivity::onComplete(const bool connected) {
+  ActivityResult result;
+  result.isCancelled = !connected;
+  if (connected) {
+    result.data = WifiResult{true, selectedSSID, connectedIP};
+  }
+  setResult(std::move(result));
+  finish();
 }

@@ -1,9 +1,8 @@
 #pragma once
+#include <HalStorage.h>
+
 #include <cstdint>
 #include <iosfwd>
-
-// Forward declarations
-class FsFile;
 
 class CrossPointSettings {
  private:
@@ -25,6 +24,8 @@ class CrossPointSettings {
     COVER = 3,
     BLANK = 4,
     COVER_CUSTOM = 5,
+    CLOCK = 6,
+    READING_STATS = 7,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
@@ -35,7 +36,7 @@ class CrossPointSettings {
     SLEEP_SCREEN_COVER_FILTER_COUNT
   };
 
-  // Status bar display type enum
+  // Status bar enum - legacy
   enum STATUS_BAR_MODE {
     NONE = 0,
     NO_PROGRESS = 1,
@@ -45,6 +46,19 @@ class CrossPointSettings {
     CHAPTER_PROGRESS_BAR = 5,
     STATUS_BAR_MODE_COUNT
   };
+  enum STATUS_BAR_PROGRESS_BAR {
+    BOOK_PROGRESS = 0,
+    CHAPTER_PROGRESS = 1,
+    HIDE_PROGRESS = 2,
+    STATUS_BAR_PROGRESS_BAR_COUNT
+  };
+  enum STATUS_BAR_PROGRESS_BAR_THICKNESS {
+    PROGRESS_BAR_THIN = 0,
+    PROGRESS_BAR_NORMAL = 1,
+    PROGRESS_BAR_THICK = 2,
+    STATUS_BAR_PROGRESS_BAR_THICKNESS_COUNT
+  };
+  enum STATUS_BAR_TITLE { BOOK_TITLE = 0, CHAPTER_TITLE = 1, HIDE_TITLE = 2, STATUS_BAR_TITLE_COUNT };
 
   enum ORIENTATION {
     PORTRAIT = 0,       // 480x800 logical coordinates (current default)
@@ -80,7 +94,7 @@ class CrossPointSettings {
   enum SIDE_BUTTON_LAYOUT { PREV_NEXT = 0, NEXT_PREV = 1, SIDE_BUTTON_LAYOUT_COUNT };
 
   // Font family options
-  enum FONT_FAMILY { BOOKERLY = 0, NOTOSANS = 1, OPENDYSLEXIC = 2, FONT_FAMILY_COUNT };
+  enum FONT_FAMILY { BOOKERLY = 0, NOTOSANS = 1, BOKERLAM = 2, FONT_FAMILY_COUNT };
   // Font size options
   enum FONT_SIZE { SMALL = 0, MEDIUM = 1, LARGE = 2, EXTRA_LARGE = 3, FONT_SIZE_COUNT };
   enum LINE_COMPRESSION { TIGHT = 0, NORMAL = 1, WIDE = 2, LINE_COMPRESSION_COUNT };
@@ -114,13 +128,16 @@ class CrossPointSettings {
   };
 
   // Short power button press actions
-  enum SHORT_PWRBTN { IGNORE = 0, SLEEP = 1, PAGE_TURN = 2, SHORT_PWRBTN_COUNT };
+  enum SHORT_PWRBTN { IGNORE = 0, SLEEP = 1, PAGE_TURN = 2, SCREEN_REFRESH = 3, READING_STATS_VIEW = 4, SHORT_PWRBTN_COUNT };
 
   // Hide battery percentage
   enum HIDE_BATTERY_PERCENTAGE { HIDE_NEVER = 0, HIDE_READER = 1, HIDE_ALWAYS = 2, HIDE_BATTERY_PERCENTAGE_COUNT };
 
   // UI Theme
-  enum UI_THEME { CLASSIC = 0, LYRA = 1, LYRA_3_COVERS = 2 };
+  enum UI_THEME { CLASSIC = 0, LYRA = 1, LYRA_3_COVERS = 2, CROSSPET = 3, CROSSPET_CLASSIC = 4 };
+
+  // Image rendering in EPUB reader
+  enum IMAGE_RENDERING { IMAGES_DISPLAY = 0, IMAGES_PLACEHOLDER = 1, IMAGES_SUPPRESS = 2, IMAGE_RENDERING_COUNT };
 
   // Sleep screen settings
   uint8_t sleepScreen = DARK;
@@ -128,8 +145,15 @@ class CrossPointSettings {
   uint8_t sleepScreenCoverMode = FIT;
   // Sleep screen cover filter
   uint8_t sleepScreenCoverFilter = NO_FILTER;
-  // Status bar settings
+  // Status bar settings (statusBar retained for migration only)
   uint8_t statusBar = FULL;
+  uint8_t statusBarChapterPageCount = 1;
+  uint8_t statusBarBookProgressPercentage = 1;
+  uint8_t statusBarProgressBar = HIDE_PROGRESS;
+  uint8_t statusBarProgressBarThickness = PROGRESS_BAR_NORMAL;
+  uint8_t statusBarTitle = CHAPTER_TITLE;
+  uint8_t statusBarBattery = 1;
+  uint8_t statusBarClock = 1;
   // Text rendering settings
   uint8_t extraParagraphSpacing = 1;
   uint8_t textAntiAliasing = 1;
@@ -169,13 +193,24 @@ class CrossPointSettings {
   // Long-press chapter skip on side buttons
   uint8_t longPressChapterSkip = 1;
   // UI Theme
-  uint8_t uiTheme = LYRA;
+  uint8_t uiTheme = CROSSPET;
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
   // Use book's embedded CSS styles for EPUB rendering (1 = enabled, 0 = disabled)
   uint8_t embeddedStyle = 1;
-  // Bluetooth enabled state (persistent)
-  uint8_t bluetoothEnabled = 0;
+  // Show hidden files/directories (starting with '.') in the file browser (0 = hidden, 1 = show)
+  uint8_t showHiddenFiles = 0;
+  // Image rendering mode in EPUB reader
+  uint8_t imageRendering = IMAGES_DISPLAY;
+
+  // Weather city selection (0=Hanoi, 1=TPHCM, 2=DaNang)
+  uint8_t weatherCity = 0;
+
+  // BLE Remote settings
+  uint8_t bleEnabled = 0;                  // 0=disabled, 1=enabled
+  char bleBondedDeviceAddr[18] = "";       // "XX:XX:XX:XX:XX:XX" format
+  char bleBondedDeviceName[32] = "";       // Display name of bonded remote
+  uint8_t bleBondedDeviceAddrType = 0;     // BLE address type (0=public, 1=random)
 
   ~CrossPointSettings() = default;
 
@@ -193,6 +228,12 @@ class CrossPointSettings {
   bool saveToFile() const;
   bool loadFromFile();
 
+  static void validateFrontButtonMapping(CrossPointSettings& settings);
+
+ private:
+  bool loadFromBinaryFile();
+
+ public:
   float getReaderLineCompression() const;
   unsigned long getSleepTimeoutMs() const;
   int getRefreshFrequency() const;

@@ -2,12 +2,12 @@
 
 #include <GfxRenderer.h>
 #include <Logging.h>
+#include <WiFi.h>
+#include <BluetoothHIDManager.h>
 
 #include "BluetoothSettingsActivity.h"
 #include "ButtonRemapActivity.h"
-#ifndef DISABLE_CALIBRE
 #include "CalibreSettingsActivity.h"
-#endif
 #include "ClearCacheActivity.h"
 #include "CrossPointSettings.h"
 #include "KOReaderSettingsActivity.h"
@@ -15,6 +15,7 @@
 #include "MappedInputManager.h"
 #include "OtaUpdateActivity.h"
 #include "SettingsList.h"
+#include "StatusBarSettingsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -31,16 +32,16 @@ void SettingsActivity::onEnter() {
   controlsSettings.clear();
   systemSettings.clear();
 
-  for (auto& setting : getSettingsList()) {
+  for (const auto& setting : getSettingsList()) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
     if (setting.category == StrId::STR_CAT_DISPLAY) {
-      displaySettings.push_back(std::move(setting));
+      displaySettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_READER) {
-      readerSettings.push_back(std::move(setting));
+      readerSettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
-      controlsSettings.push_back(std::move(setting));
+      controlsSettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_SYSTEM) {
-      systemSettings.push_back(std::move(setting));
+      systemSettings.push_back(setting);
     }
     // Web-only categories (KOReader Sync, OPDS Browser) are skipped for device UI
   }
@@ -48,15 +49,15 @@ void SettingsActivity::onEnter() {
   // Append device-only ACTION items
   controlsSettings.insert(controlsSettings.begin(),
                           SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
+  // BLE pairing is in System section (next to BLE toggle and WiFi)
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_BLE_PAIR_DEVICE, SettingAction::Bluetooth));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_BLUETOOTH, SettingAction::Bluetooth));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
-#ifndef DISABLE_CALIBRE
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_BROWSER, SettingAction::OPDSBrowser));
-#endif
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
+  readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
 
   // Reset selection to first category
   selectedCategoryIndex = 0;
@@ -71,16 +72,12 @@ void SettingsActivity::onEnter() {
 }
 
 void SettingsActivity::onExit() {
-  ActivityWithSubactivity::onExit();
+  Activity::onExit();
 
   UITheme::getInstance().reload();  // Re-apply theme in case it was changed
 }
 
 void SettingsActivity::loop() {
-  if (subActivity) {
-    subActivity->loop();
-    return;
-  }
   bool hasChangedCategory = false;
 
   // Handle actions with early return
@@ -103,36 +100,27 @@ void SettingsActivity::loop() {
   }
 
   // Handle navigation
-  // Note: ButtonNavigator treats Left+Up as Previous and Right+Down as Next
-  // So we must handle category navigation BEFORE calling buttonNavigator to avoid double-triggering
-  
-  // Category navigation with Left/Right buttons (discrete presses only)
-  bool categoryNavigated = false;
-  if (mappedInput.wasPressed(MappedInputManager::Button::Right)) {
+  buttonNavigator.onNextRelease([this] {
+    selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1);
+    requestUpdate();
+  });
+
+  buttonNavigator.onPreviousRelease([this] {
+    selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, settingsCount + 1);
+    requestUpdate();
+  });
+
+  buttonNavigator.onNextContinuous([this, &hasChangedCategory] {
+    hasChangedCategory = true;
     selectedCategoryIndex = ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount);
-    hasChangedCategory = true;
-    categoryNavigated = true;
     requestUpdate();
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::Left)) {
+  });
+
+  buttonNavigator.onPreviousContinuous([this, &hasChangedCategory] {
+    hasChangedCategory = true;
     selectedCategoryIndex = ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount);
-    hasChangedCategory = true;
-    categoryNavigated = true;
     requestUpdate();
-  }
-
-  // Only handle Up/Down setting navigation if we didn't navigate categories.
-  // Use explicit Up/Down buttons so Left/Right never trigger list movement on release.
-  if (!categoryNavigated) {
-    buttonNavigator.onRelease({MappedInputManager::Button::Down}, [this] {
-      selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1);
-      requestUpdate();
-    });
-
-    buttonNavigator.onRelease({MappedInputManager::Button::Up}, [this] {
-      selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, settingsCount + 1);
-      requestUpdate();
-    });
-  }
+  });
 
   if (hasChangedCategory) {
     selectedSettingIndex = (selectedSettingIndex == 0) ? 0 : 1;
@@ -166,6 +154,11 @@ void SettingsActivity::toggleCurrentSetting() {
     // Toggle the boolean value using the member pointer
     const bool currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = !currentValue;
+  } else if (setting.type == SettingType::TOGGLE && setting.valueGetter && setting.valueSetter) {
+    // DynamicToggle: backed by external getter/setter (e.g. CrossPetSettings)
+    const uint8_t currentValue = setting.valueGetter();
+    setting.valueSetter(currentValue ? 0 : 1);
+    return;  // setter is responsible for saving; skip SETTINGS.saveToFile() below
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(setting.enumValues.size());
@@ -177,52 +170,59 @@ void SettingsActivity::toggleCurrentSetting() {
       SETTINGS.*(setting.valuePtr) = currentValue + setting.valueRange.step;
     }
   } else if (setting.type == SettingType::ACTION) {
-    auto enterSubActivity = [this](Activity* activity) {
-      exitActivity();
-      enterNewActivity(activity);
-    };
-
-    auto onComplete = [this] {
-      exitActivity();
-      requestUpdate();
-    };
-
-    auto onCompleteBool = [this](bool) {
-      exitActivity();
-      requestUpdate();
-    };
+    auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
 
     switch (setting.action) {
       case SettingAction::RemapFrontButtons:
-        enterSubActivity(new ButtonRemapActivity(renderer, mappedInput, onComplete));
+        startActivityForResult(std::make_unique<ButtonRemapActivity>(renderer, mappedInput), resultHandler);
+        break;
+      case SettingAction::CustomiseStatusBar:
+        startActivityForResult(std::make_unique<StatusBarSettingsActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::KOReaderSync:
-        enterSubActivity(new KOReaderSettingsActivity(renderer, mappedInput, onComplete));
+        startActivityForResult(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput), resultHandler);
         break;
-#ifndef DISABLE_CALIBRE
       case SettingAction::OPDSBrowser:
-        enterSubActivity(new CalibreSettingsActivity(renderer, mappedInput, onComplete));
+        startActivityForResult(std::make_unique<CalibreSettingsActivity>(renderer, mappedInput), resultHandler);
         break;
-#endif
-      case SettingAction::Network:
-        enterSubActivity(new WifiSelectionActivity(renderer, mappedInput, onCompleteBool, false));
+      case SettingAction::Network: {
+        // Disable BLE before WiFi (mutually exclusive on ESP32-C3)
+        BluetoothHIDManager::getInstance().disable();
+        startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false),
+                               [this](const ActivityResult&) {
+                                 // WifiSelectionActivity doesn't own WiFi lifecycle — clean up here
+                                 WiFi.disconnect(false);
+                                 WiFi.mode(WIFI_OFF);
+                                 // Re-enable BLE if it was configured
+                                 if (SETTINGS.bleEnabled) {
+                                   auto& btMgr = BluetoothHIDManager::getInstance();
+                                   if (btMgr.enable() && strlen(SETTINGS.bleBondedDeviceAddr) > 0) {
+                                     btMgr.autoReconnect(SETTINGS.bleBondedDeviceAddr, SETTINGS.bleBondedDeviceAddrType);
+                                   }
+                                 }
+                                 SETTINGS.saveToFile();
+                               });
         break;
-      case SettingAction::Bluetooth:
-        enterSubActivity(new BluetoothSettingsActivity(renderer, mappedInput, onComplete));
-        break;
+      }
       case SettingAction::ClearCache:
-        enterSubActivity(new ClearCacheActivity(renderer, mappedInput, onComplete));
+        startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::CheckForUpdates:
-        enterSubActivity(new OtaUpdateActivity(renderer, mappedInput, onComplete));
+        startActivityForResult(std::make_unique<OtaUpdateActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::Language:
-        enterSubActivity(new LanguageSelectActivity(renderer, mappedInput, onComplete));
+        startActivityForResult(std::make_unique<LanguageSelectActivity>(renderer, mappedInput), resultHandler);
+        break;
+      case SettingAction::Bluetooth:
+        startActivityForResult(
+            std::make_unique<BluetoothSettingsActivity>(renderer, mappedInput),
+            resultHandler);
         break;
       case SettingAction::None:
         // Do nothing
         break;
     }
+    return;  // Results will be handled in the result handler, so we can return early here
   } else {
     return;
   }
@@ -230,13 +230,13 @@ void SettingsActivity::toggleCurrentSetting() {
   SETTINGS.saveToFile();
 }
 
-void SettingsActivity::render(Activity::RenderLock&&) {
+void SettingsActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
-  auto metrics = UITheme::getInstance().getMetrics();
+  const auto& metrics = UITheme::getInstance().getMetrics();
 
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_SETTINGS_TITLE),
                  CROSSPOINT_VERSION);
@@ -263,6 +263,9 @@ void SettingsActivity::render(Activity::RenderLock&&) {
         if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
           const bool value = SETTINGS.*(setting.valuePtr);
           valueText = value ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+        } else if (setting.type == SettingType::TOGGLE && setting.valueGetter) {
+          // DynamicToggle: backed by external getter (e.g. CrossPetSettings)
+          valueText = setting.valueGetter() ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
         } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
           const uint8_t value = SETTINGS.*(setting.valuePtr);
           valueText = I18N.get(setting.enumValues[value]);
@@ -274,7 +277,7 @@ void SettingsActivity::render(Activity::RenderLock&&) {
       true);
 
   // Draw help text
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   // Always use standard refresh for settings screen

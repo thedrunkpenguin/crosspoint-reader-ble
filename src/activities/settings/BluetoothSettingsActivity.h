@@ -21,9 +21,8 @@ class BluetoothSettingsActivity : public Activity {
   unsigned long lastScanTime = 0;
 
  public:
-  explicit BluetoothSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                     const std::function<void()>& onComplete)
-      : Activity("BluetoothSettings", renderer, mappedInput), onComplete(onComplete) {}
+  explicit BluetoothSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+      : Activity("BluetoothSettings", renderer, mappedInput) {}
 
   void onEnter() override;
   void loop() override;
@@ -35,6 +34,4 @@ class BluetoothSettingsActivity : public Activity {
   void renderMainMenu();
   void renderDeviceList();
   std::string getSignalStrengthIndicator(const int32_t rssi) const;
-  
-  const std::function<void()> onComplete;
 };

@@ -3,7 +3,6 @@
 #include <vector>
 
 #include "../Activity.h"
-#include "./MyLibraryActivity.h"
 #include "util/ButtonNavigator.h"
 
 struct RecentBook;
@@ -15,40 +14,65 @@ class HomeActivity final : public Activity {
   bool recentsLoading = false;
   bool recentsLoaded = false;
   bool firstRenderDone = false;
-  bool hasOpdsUrl = false;
+  bool weatherRefreshing = false;  // Show "refreshing" status on screen
+  const char* syncResultMsg = nullptr;  // "OK" or "Failed" after sync
+  unsigned long syncResultExpiry = 0;   // millis() when to clear message
+  bool syncTriggered = false;      // Guard against re-triggering sync while held
   bool coverRendered = false;      // Track if cover has been rendered once
   bool coverBufferStored = false;  // Track if cover buffer is stored
   uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image
   std::vector<RecentBook> recentBooks;
-  const std::function<void(const std::string& path)> onSelectBook;
-  const std::function<void()> onMyLibraryOpen;
-  const std::function<void()> onRecentsOpen;
-  const std::function<void()> onSettingsOpen;
-  const std::function<void()> onFileTransferOpen;
-  const std::function<void()> onOpdsBrowserOpen;
+  void onSelectBook(const std::string& path);
+  void onFileBrowserOpen();
+  void onRecentBooksOpen();
+  void onVirtualPetOpen();
+  void onFileTransferOpen();
+  void onSettingsOpen();
+  void onToolsOpen();
 
-  int getMenuItemCount() const;
   bool storeCoverBuffer();    // Store frame buffer for cover image
   bool restoreCoverBuffer();  // Restore frame buffer from stored cover
   void freeCoverBuffer();     // Free the stored cover buffer
   void loadRecentBooks(int maxBooks);
   void loadRecentCovers(int coverHeight);
 
+  // Original upstream layout (CLASSIC/LYRA/LYRA_3_COVERS)
+  int getMenuItemCount() const;
+  void renderOriginal();
+  void loopOriginal();
+
+  // CrossPet (new card layout) render helpers
+  void renderContinueReadingCard();
+  void renderRecentCovers();       // Draw cover thumbnails (cached in buffer)
+  void renderRecentSelection();    // Selection highlight for recent covers
+  void renderReadingStatsBar();    // Pet widget or reading stats in gap
+  void renderBottomBar();          // 4-icon bottom navigation bar
+  void renderSelectionHighlight();
+
+  // CrossPet Classic (v1.6.8 grid layout) render helpers
+  void renderCoverPanel(int panelX, int panelY, int panelW, int panelH, int coverH);
+  void renderProgressPanel(int panelX, int panelY, int panelW, int panelH);
+  void renderGridCell(int cellX, int cellY, int cellW, int cellH,
+                      int gridIdx, const uint8_t* icon, const char* label);
+  void renderClassicSelectionHighlight(int panelX, int panelY, int panelW, int panelH);
+
+  // Shared render helpers
+  void renderPetStatusWidget(int headerH);
+  void renderHeaderClock();
+  void doSync();
+  void performSyncAfterWifi();
+
+  // Theme-specific render/loop dispatchers
+  void renderCrossPet();
+  void renderClassic();
+  void loopCrossPet();
+  void loopClassic();
+
  public:
-  explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                        const std::function<void(const std::string& path)>& onSelectBook,
-                        const std::function<void()>& onMyLibraryOpen, const std::function<void()>& onRecentsOpen,
-                        const std::function<void()>& onSettingsOpen, const std::function<void()>& onFileTransferOpen,
-                        const std::function<void()>& onOpdsBrowserOpen)
-      : Activity("Home", renderer, mappedInput),
-        onSelectBook(onSelectBook),
-        onMyLibraryOpen(onMyLibraryOpen),
-        onRecentsOpen(onRecentsOpen),
-        onSettingsOpen(onSettingsOpen),
-        onFileTransferOpen(onFileTransferOpen),
-        onOpdsBrowserOpen(onOpdsBrowserOpen) {}
+  explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+      : Activity("Home", renderer, mappedInput) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;
-  void render(Activity::RenderLock&&) override;
+  void render(RenderLock&&) override;
 };

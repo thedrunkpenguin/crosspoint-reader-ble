@@ -1,15 +1,15 @@
 #include "LyraTheme.h"
 
 #include <GfxRenderer.h>
+#include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <I18n.h>
-#include <Utf8.h>
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include "Battery.h"
+#include "activities/tools/WeatherActivity.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "components/icons/book.h"
@@ -22,6 +22,7 @@
 #include "components/icons/image24.h"
 #include "components/icons/library.h"
 #include "components/icons/recent.h"
+#include "components/icons/tools.h"
 #include "components/icons/settings2.h"
 #include "components/icons/text24.h"
 #include "components/icons/transfer.h"
@@ -77,6 +78,8 @@ const uint8_t* iconForName(UIIcon icon, int size) {
         return WifiIcon;
       case UIIcon::Hotspot:
         return HotspotIcon;
+      case UIIcon::Tools:
+        return ToolsIcon;
       default:
         return nullptr;
     }
@@ -87,7 +90,7 @@ const uint8_t* iconForName(UIIcon icon, int size) {
 
 void LyraTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const bool showPercentage) const {
   // Left aligned: icon on left, percentage on right (reader mode)
-  const uint16_t percentage = battery.readPercentage();
+  const uint16_t percentage = powerManager.getBatteryPercentage();
   const int y = rect.y + 6;
   const int battWidth = LyraMetrics::values.batteryWidth;
 
@@ -124,7 +127,7 @@ void LyraTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const bo
 
 void LyraTheme::drawBatteryRight(const GfxRenderer& renderer, Rect rect, const bool showPercentage) const {
   // Right aligned: percentage on left, icon on right (UI headers)
-  const uint16_t percentage = battery.readPercentage();
+  const uint16_t percentage = powerManager.getBatteryPercentage();
   const int y = rect.y + 6;
   const int battWidth = LyraMetrics::values.batteryWidth;
 
@@ -216,6 +219,17 @@ void LyraTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char
 
 void LyraTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
                            bool selected) const {
+  const int availableWidth = rect.width - 2 * LyraMetrics::values.contentSidePadding;
+  const int tabPadding = 2 * hPaddingInSelection;
+
+  // Measure total width at normal font; fall back to smaller font if labels overflow
+  int totalWidth = 0;
+  for (const auto& tab : tabs) {
+    totalWidth += renderer.getTextWidth(UI_10_FONT_ID, tab.label, EpdFontFamily::REGULAR) + tabPadding;
+  }
+  totalWidth += (int)(tabs.size() - 1) * LyraMetrics::values.tabSpacing;
+  const int fontId = (totalWidth > availableWidth) ? SMALL_FONT_ID : UI_10_FONT_ID;
+
   int currentX = rect.x + LyraMetrics::values.contentSidePadding;
 
   if (selected) {
@@ -223,24 +237,24 @@ void LyraTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::ve
   }
 
   for (const auto& tab : tabs) {
-    const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, tab.label, EpdFontFamily::REGULAR);
+    const int textWidth = renderer.getTextWidth(fontId, tab.label, EpdFontFamily::REGULAR);
 
     if (tab.selected) {
       if (selected) {
-        renderer.fillRoundedRect(currentX, rect.y + 1, textWidth + 2 * hPaddingInSelection, rect.height - 4,
+        renderer.fillRoundedRect(currentX, rect.y + 1, textWidth + tabPadding, rect.height - 4,
                                  cornerRadius, Color::Black);
       } else {
-        renderer.fillRectDither(currentX, rect.y, textWidth + 2 * hPaddingInSelection, rect.height - 3,
+        renderer.fillRectDither(currentX, rect.y, textWidth + tabPadding, rect.height - 3,
                                 Color::LightGray);
-        renderer.drawLine(currentX, rect.y + rect.height - 3, currentX + textWidth + 2 * hPaddingInSelection,
+        renderer.drawLine(currentX, rect.y + rect.height - 3, currentX + textWidth + tabPadding,
                           rect.y + rect.height - 3, 2, true);
       }
     }
 
-    renderer.drawText(UI_10_FONT_ID, currentX + hPaddingInSelection, rect.y + 6, tab.label, !(tab.selected && selected),
+    renderer.drawText(fontId, currentX + hPaddingInSelection, rect.y + 6, tab.label, !(tab.selected && selected),
                       EpdFontFamily::REGULAR);
 
-    currentX += textWidth + LyraMetrics::values.tabSpacing + 2 * hPaddingInSelection;
+    currentX += textWidth + LyraMetrics::values.tabSpacing + tabPadding;
   }
 
   renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
@@ -344,6 +358,13 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   const GfxRenderer::Orientation orig_orientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
+  // In PortraitInverted, the device is flipped 180° so physical button positions are reversed.
+  // Swap label order so each label aligns with its physical button when rendered in Portrait coords.
+  if (orig_orientation == GfxRenderer::Orientation::PortraitInverted) {
+    std::swap(btn1, btn4);
+    std::swap(btn2, btn3);
+  }
+
   const int pageHeight = renderer.getScreenHeight();
   constexpr int buttonWidth = 80;
   constexpr int smallButtonHeight = 15;
@@ -357,7 +378,7 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
     const int x = buttonPositions[i];
     if (labels[i] != nullptr && labels[i][0] != '\0') {
       // Draw the filled background and border for a FULL-sized button
-      renderer.fillRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, false);
+      renderer.fillRoundedRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, cornerRadius, Color::White);
       renderer.drawRoundedRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, 1, cornerRadius, true, true, false,
                                false, true);
       const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, labels[i]);
@@ -365,7 +386,8 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
       renderer.drawText(SMALL_FONT_ID, textX, pageHeight - buttonY + textYOffset, labels[i]);
     } else {
       // Draw the filled background and border for a SMALL-sized button
-      renderer.fillRect(x, pageHeight - smallButtonHeight, buttonWidth, smallButtonHeight, false);
+      renderer.fillRoundedRect(x, pageHeight - smallButtonHeight, buttonWidth, smallButtonHeight, cornerRadius,
+                               Color::White);
       renderer.drawRoundedRect(x, pageHeight - smallButtonHeight, buttonWidth, smallButtonHeight, 1, cornerRadius, true,
                                true, false, false, true);
     }
@@ -463,7 +485,7 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
       }
 
       coverBufferStored = storeCoverBuffer();
-      coverRendered = true;
+      coverRendered = coverBufferStored;  // Only consider it rendered if we successfully stored the buffer
     }
 
     bool bookSelected = (selectorIndex == 0);
@@ -484,57 +506,7 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
                                hPaddingInSelection, cornerRadius, false, false, true, true, Color::LightGray);
     }
 
-    // Wrap title to up to 3 lines (word-wrap by advance width)
-    const std::string& lastBookTitle = book.title;
-    std::vector<std::string> words;
-    words.reserve(8);
-    std::string::size_type wordStart = 0;
-    std::string::size_type wordEnd = 0;
-    // find_first_not_of skips leading/interstitial spaces
-    while ((wordStart = lastBookTitle.find_first_not_of(' ', wordEnd)) != std::string::npos) {
-      wordEnd = lastBookTitle.find(' ', wordStart);
-      if (wordEnd == std::string::npos) wordEnd = lastBookTitle.size();
-      words.emplace_back(lastBookTitle.substr(wordStart, wordEnd - wordStart));
-    }
-    const int maxLineWidth = textWidth;
-    const int spaceWidth = renderer.getSpaceWidth(UI_12_FONT_ID, EpdFontFamily::BOLD);
-    std::vector<std::string> titleLines;
-    std::string currentLine;
-    for (auto& w : words) {
-      if (titleLines.size() >= 3) {
-        titleLines.back().append("...");
-        while (!titleLines.back().empty() && titleLines.back().size() > 3 &&
-               renderer.getTextWidth(UI_12_FONT_ID, titleLines.back().c_str(), EpdFontFamily::BOLD) > maxLineWidth) {
-          titleLines.back().resize(titleLines.back().size() - 3);
-          utf8RemoveLastChar(titleLines.back());
-          titleLines.back().append("...");
-        }
-        break;
-      }
-      int wordW = renderer.getTextWidth(UI_12_FONT_ID, w.c_str(), EpdFontFamily::BOLD);
-      while (wordW > maxLineWidth && !w.empty()) {
-        utf8RemoveLastChar(w);
-        std::string withE = w + "...";
-        wordW = renderer.getTextWidth(UI_12_FONT_ID, withE.c_str(), EpdFontFamily::BOLD);
-        if (wordW <= maxLineWidth) {
-          w = withE;
-          break;
-        }
-      }
-      if (w.empty()) continue;  // Skip words that couldn't fit even truncated
-      int newW = renderer.getTextAdvanceX(UI_12_FONT_ID, currentLine.c_str(), EpdFontFamily::BOLD);
-      if (newW > 0) newW += spaceWidth;
-      newW += renderer.getTextAdvanceX(UI_12_FONT_ID, w.c_str(), EpdFontFamily::BOLD);
-      if (newW > maxLineWidth && !currentLine.empty()) {
-        titleLines.push_back(currentLine);
-        currentLine = w;
-      } else if (currentLine.empty()) {
-        currentLine = w;
-      } else {
-        currentLine.append(" ").append(w);
-      }
-    }
-    if (!currentLine.empty() && titleLines.size() < 3) titleLines.push_back(currentLine);
+    auto titleLines = renderer.wrappedText(UI_12_FONT_ID, book.title.c_str(), textWidth, 3, EpdFontFamily::BOLD);
 
     auto author = renderer.truncatedText(UI_10_FONT_ID, book.author.c_str(), textWidth);
     const int titleLineHeight = renderer.getLineHeight(UI_12_FONT_ID);

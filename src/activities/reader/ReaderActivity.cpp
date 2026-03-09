@@ -9,6 +9,7 @@
 #include "TxtReaderActivity.h"
 #include "Xtc.h"
 #include "XtcReaderActivity.h"
+#include "activities/util/BmpViewerActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
 #include "util/StringUtils.h"
 
@@ -29,6 +30,8 @@ bool ReaderActivity::isTxtFile(const std::string& path) {
          StringUtils::checkFileExtension(path, ".md");  // Treat .md as txt files (until we have a markdown reader)
 }
 
+bool ReaderActivity::isBmpFile(const std::string& path) { return StringUtils::checkFileExtension(path, ".bmp"); }
+
 std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   if (!Storage.exists(path.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", path.c_str());
@@ -40,7 +43,15 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
     return epub;
   }
 
-  LOG_ERR("READER", "Failed to load epub");
+  // Retry once with fresh cache (stale cache from different firmware can cause load failure)
+  LOG_ERR("READER", "Failed to load epub, clearing cache and retrying");
+  epub->clearCache();
+  epub = std::unique_ptr<Epub>(new Epub(path, "/.crosspoint"));
+  if (epub->load(true, SETTINGS.embeddedStyle == 0)) {
+    return epub;
+  }
+
+  LOG_ERR("READER", "Failed to load epub after cache clear");
   return nullptr;
 }
 
@@ -55,7 +66,15 @@ std::unique_ptr<Xtc> ReaderActivity::loadXtc(const std::string& path) {
     return xtc;
   }
 
-  LOG_ERR("READER", "Failed to load XTC");
+  // Retry once with fresh cache (stale cache from different firmware can cause load failure)
+  LOG_ERR("READER", "Failed to load XTC, clearing cache and retrying");
+  xtc->clearCache();
+  xtc = std::unique_ptr<Xtc>(new Xtc(path, "/.crosspoint"));
+  if (xtc->load()) {
+    return xtc;
+  }
+
+  LOG_ERR("READER", "Failed to load XTC after cache clear");
   return nullptr;
 }
 
@@ -76,36 +95,34 @@ std::unique_ptr<Txt> ReaderActivity::loadTxt(const std::string& path) {
 
 void ReaderActivity::goToLibrary(const std::string& fromBookPath) {
   // If coming from a book, start in that book's folder; otherwise start from root
-  const auto initialPath = fromBookPath.empty() ? "/" : extractFolderPath(fromBookPath);
-  onGoToLibrary(initialPath);
+  auto initialPath = fromBookPath.empty() ? "/" : extractFolderPath(fromBookPath);
+  activityManager.goToFileBrowser(std::move(initialPath));
 }
 
 void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {
   const auto epubPath = epub->getPath();
   currentBookPath = epubPath;
-  exitActivity();
-  enterNewActivity(new EpubReaderActivity(
-      renderer, mappedInput, std::move(epub), [this, epubPath] { goToLibrary(epubPath); }, [this] { onGoBack(); }));
+  activityManager.replaceActivity(std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub)));
+}
+
+void ReaderActivity::onGoToBmpViewer(const std::string& path) {
+  activityManager.replaceActivity(std::make_unique<BmpViewerActivity>(renderer, mappedInput, path));
 }
 
 void ReaderActivity::onGoToXtcReader(std::unique_ptr<Xtc> xtc) {
   const auto xtcPath = xtc->getPath();
   currentBookPath = xtcPath;
-  exitActivity();
-  enterNewActivity(new XtcReaderActivity(
-      renderer, mappedInput, std::move(xtc), [this, xtcPath] { goToLibrary(xtcPath); }, [this] { onGoBack(); }));
+  activityManager.replaceActivity(std::make_unique<XtcReaderActivity>(renderer, mappedInput, std::move(xtc)));
 }
 
 void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {
   const auto txtPath = txt->getPath();
   currentBookPath = txtPath;
-  exitActivity();
-  enterNewActivity(new TxtReaderActivity(
-      renderer, mappedInput, std::move(txt), [this, txtPath] { goToLibrary(txtPath); }, [this] { onGoBack(); }));
+  activityManager.replaceActivity(std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt)));
 }
 
 void ReaderActivity::onEnter() {
-  ActivityWithSubactivity::onEnter();
+  Activity::onEnter();
 
   if (initialBookPath.empty()) {
     goToLibrary();  // Start from root when entering via Browse
@@ -113,8 +130,9 @@ void ReaderActivity::onEnter() {
   }
 
   currentBookPath = initialBookPath;
-
-  if (isXtcFile(initialBookPath)) {
+  if (isBmpFile(initialBookPath)) {
+    onGoToBmpViewer(initialBookPath);
+  } else if (isXtcFile(initialBookPath)) {
     auto xtc = loadXtc(initialBookPath);
     if (!xtc) {
       onGoBack();
@@ -137,3 +155,5 @@ void ReaderActivity::onEnter() {
     onGoToEpubReader(std::move(epub));
   }
 }
+
+void ReaderActivity::onGoBack() { finish(); }

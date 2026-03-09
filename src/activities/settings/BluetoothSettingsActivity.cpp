@@ -23,15 +23,19 @@ void BluetoothSettingsActivity::onEnter() {
     LOG_INF("BT", "BluetoothHIDManager ready");
     
     // Restore Bluetooth persistent state on entry
-    if (SETTINGS.bluetoothEnabled && !btMgr->isEnabled()) {
+    if (SETTINGS.bleEnabled && !btMgr->isEnabled()) {
       LOG_INF("BT", "Restoring Bluetooth from settings (enabled)");
       if (btMgr->enable()) {
         lastError = "Bluetooth restored";
+        // Resume auto-reconnect if we have a bonded device
+        if (strlen(SETTINGS.bleBondedDeviceAddr) > 0) {
+          btMgr->autoReconnect(SETTINGS.bleBondedDeviceAddr, SETTINGS.bleBondedDeviceAddrType);
+        }
       } else {
         lastError = "Failed to restore BT";
-        SETTINGS.bluetoothEnabled = 0;
+        SETTINGS.bleEnabled = 0;
       }
-    } else if (!SETTINGS.bluetoothEnabled && btMgr->isEnabled()) {
+    } else if (!SETTINGS.bleEnabled && btMgr->isEnabled()) {
       LOG_INF("BT", "Disabling Bluetooth per settings (disabled)");
       btMgr->disable();
       lastError = "Bluetooth disabled per settings";
@@ -61,7 +65,7 @@ void BluetoothSettingsActivity::loop() {
       requestUpdate();
       return;
     } else {
-      if (onComplete) onComplete();
+      finish();
       return;
     }
   }
@@ -105,7 +109,7 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
           LOG_INF("BT", "Disabling Bluetooth...");
           if (btMgr->disable()) {
             lastError = "Bluetooth disabled";
-            SETTINGS.bluetoothEnabled = 0;
+            SETTINGS.bleEnabled = 0;
             SETTINGS.saveToFile();
           } else {
             lastError = "Failed to disable";
@@ -114,7 +118,7 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
           LOG_INF("BT", "Enabling Bluetooth...");
           if (btMgr->enable()) {
             lastError = "Bluetooth enabled";
-            SETTINGS.bluetoothEnabled = 1;
+            SETTINGS.bleEnabled = 1;
             SETTINGS.saveToFile();
           } else {
             lastError = btMgr->lastError.empty() ? "Failed to enable" : btMgr->lastError;
@@ -226,6 +230,12 @@ void BluetoothSettingsActivity::handleDeviceListInput() {
       if (btMgr->connectToDevice(device.address)) {
         lastError = std::string("Connected to ") + device.name;
         LOG_INF("BT", "Successfully connected to %s", device.name.c_str());
+        // Save bonded device info to settings for auto-reconnect after sleep
+        strncpy(SETTINGS.bleBondedDeviceAddr, device.address.c_str(), sizeof(SETTINGS.bleBondedDeviceAddr) - 1);
+        SETTINGS.bleBondedDeviceAddr[sizeof(SETTINGS.bleBondedDeviceAddr) - 1] = '\0';
+        strncpy(SETTINGS.bleBondedDeviceName, device.name.c_str(), sizeof(SETTINGS.bleBondedDeviceName) - 1);
+        SETTINGS.bleBondedDeviceName[sizeof(SETTINGS.bleBondedDeviceName) - 1] = '\0';
+        SETTINGS.saveToFile();
       } else {
         lastError = btMgr->lastError.empty() ? "Connection failed" : btMgr->lastError;
         LOG_ERR("BT", "Failed to connect: %s", lastError.c_str());

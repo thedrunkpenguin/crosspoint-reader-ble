@@ -1,3 +1,4 @@
+#include <BluetoothHIDManager.h>
 #include "HomeActivity.h"
 
 #include <Bitmap.h>
@@ -5,103 +6,93 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
-#include <Utf8.h>
 #include <Xtc.h>
 
+#include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
-#include "Battery.h"
+#include "CrossPetSettings.h"
 #include "CrossPointSettings.h"
-#include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "activities/network/WifiSelectionActivity.h"
+#include "activities/tools/WeatherActivity.h"
+#include "WifiCredentialStore.h"
+#include <WiFi.h>
+#include "pet/PetEvolution.h"
+#include "pet/PetManager.h"
 #include "util/StringUtils.h"
 
-int HomeActivity::getMenuItemCount() const {
-  int count = 4;  // My Library, Recents, File transfer, Settings
-  if (!recentBooks.empty()) {
-    count += recentBooks.size();
-  }
-#ifndef DISABLE_OPDS
-  if (hasOpdsUrl) {
-    count++;
-  }
-#endif
-  return count;
+
+// ── Buffer management ─────────────────────────────────────────────────────────
+
+bool HomeActivity::storeCoverBuffer() {
+  uint8_t* fb = renderer.getFrameBuffer();
+  if (!fb) return false;
+  freeCoverBuffer();
+  coverBuffer = static_cast<uint8_t*>(malloc(GfxRenderer::getBufferSize()));
+  if (!coverBuffer) return false;
+  memcpy(coverBuffer, fb, GfxRenderer::getBufferSize());
+  return true;
 }
+
+bool HomeActivity::restoreCoverBuffer() {
+  if (!coverBuffer) return false;
+  uint8_t* fb = renderer.getFrameBuffer();
+  if (!fb) return false;
+  memcpy(fb, coverBuffer, GfxRenderer::getBufferSize());
+  return true;
+}
+
+void HomeActivity::freeCoverBuffer() {
+  if (coverBuffer) { free(coverBuffer); coverBuffer = nullptr; }
+  coverBufferStored = false;
+}
+
+// ── Book loading ──────────────────────────────────────────────────────────────
 
 void HomeActivity::loadRecentBooks(int maxBooks) {
   recentBooks.clear();
-  const auto& books = RECENT_BOOKS.getBooks();
-  recentBooks.reserve(std::min(static_cast<int>(books.size()), maxBooks));
-
-  for (const RecentBook& book : books) {
-    // Limit to maximum number of recent books
-    if (recentBooks.size() >= maxBooks) {
-      break;
-    }
-
-    // Skip if file no longer exists
-    if (!Storage.exists(book.path.c_str())) {
-      continue;
-    }
-
-    recentBooks.push_back(book);
+  for (const RecentBook& b : RECENT_BOOKS.getBooks()) {
+    if (static_cast<int>(recentBooks.size()) >= maxBooks) break;
+    if (Storage.exists(b.path.c_str())) recentBooks.push_back(b);
   }
 }
 
 void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoading = true;
+  Rect popup;
   bool showingLoading = false;
-  Rect popupRect;
-
+  bool anyChanged = false;
   int progress = 0;
+
   for (RecentBook& book : recentBooks) {
     if (!book.coverBmpPath.empty()) {
-      std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
-      if (!Storage.exists(coverPath.c_str())) {
-        // If epub, try to load the metadata for title/author and cover
+      std::string thumbPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
+      if (!Storage.exists(thumbPath.c_str())) {
+        bool generated = false;
         if (StringUtils::checkFileExtension(book.path, ".epub")) {
           Epub epub(book.path, "/.crosspoint");
-          // Skip loading css since we only need metadata here
           epub.load(false, true);
-
-          // Try to generate thumbnail image for Continue Reading card
-          if (!showingLoading) {
-            showingLoading = true;
-            popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-          }
-          GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
-          bool success = epub.generateThumbBmp(coverHeight);
-          if (!success) {
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
-            book.coverBmpPath = "";
-          }
-          coverRendered = false;
-          requestUpdate();
+          if (!showingLoading) { showingLoading = true; popup = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP)); }
+          GUI.fillPopupProgress(renderer, popup, 10 + progress * (90 / (int)recentBooks.size()));
+          generated = epub.generateThumbBmp(coverHeight);
+          if (!generated) { RECENT_BOOKS.updateBook(book.path, book.title, book.author, ""); book.coverBmpPath = ""; }
         } else if (StringUtils::checkFileExtension(book.path, ".xtch") ||
                    StringUtils::checkFileExtension(book.path, ".xtc")) {
-          // Handle XTC file
           Xtc xtc(book.path, "/.crosspoint");
           if (xtc.load()) {
-            // Try to generate thumbnail image for Continue Reading card
-            if (!showingLoading) {
-              showingLoading = true;
-              popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-            }
-            GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
-            bool success = xtc.generateThumbBmp(coverHeight);
-            if (!success) {
-              RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
-              book.coverBmpPath = "";
-            }
-            coverRendered = false;
-            requestUpdate();
+            if (!showingLoading) { showingLoading = true; popup = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP)); }
+            GUI.fillPopupProgress(renderer, popup, 10 + progress * (90 / (int)recentBooks.size()));
+            generated = xtc.generateThumbBmp(coverHeight);
+            if (!generated) { RECENT_BOOKS.updateBook(book.path, book.title, book.author, ""); book.coverBmpPath = ""; }
           }
         }
+        if (generated) anyChanged = true;
       }
     }
     progress++;
@@ -109,167 +100,181 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
   recentsLoaded = true;
   recentsLoading = false;
+  if (anyChanged) {
+    coverRendered = false;
+    requestUpdate();
+  }
 }
+
+// ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 void HomeActivity::onEnter() {
   Activity::onEnter();
-
-  // Check if OPDS browser URL is configured
-#ifndef DISABLE_OPDS
-  hasOpdsUrl = strlen(SETTINGS.opdsServerUrl) > 0;
-#else
-  hasOpdsUrl = false;
-#endif
-
   selectorIndex = 0;
-
-  auto metrics = UITheme::getInstance().getMetrics();
-  loadRecentBooks(metrics.homeRecentBooksCount);
-
-  // Trigger first update
+  coverRendered = false;
+  firstRenderDone = false;
+  recentsLoaded = false;
+  recentsLoading = false;
+  loadRecentBooks(4);
   requestUpdate();
 }
 
 void HomeActivity::onExit() {
   Activity::onExit();
-
-  // Free the stored cover buffer if any
   freeCoverBuffer();
 }
 
-bool HomeActivity::storeCoverBuffer() {
-  uint8_t* frameBuffer = renderer.getFrameBuffer();
-  if (!frameBuffer) {
-    return false;
-  }
-
-  // Free any existing buffer first
-  freeCoverBuffer();
-
-  const size_t bufferSize = GfxRenderer::getBufferSize();
-  coverBuffer = static_cast<uint8_t*>(malloc(bufferSize));
-  if (!coverBuffer) {
-    return false;
-  }
-
-  memcpy(coverBuffer, frameBuffer, bufferSize);
-  return true;
-}
-
-bool HomeActivity::restoreCoverBuffer() {
-  if (!coverBuffer) {
-    return false;
-  }
-
-  uint8_t* frameBuffer = renderer.getFrameBuffer();
-  if (!frameBuffer) {
-    return false;
-  }
-
-  const size_t bufferSize = GfxRenderer::getBufferSize();
-  memcpy(frameBuffer, coverBuffer, bufferSize);
-  return true;
-}
-
-void HomeActivity::freeCoverBuffer() {
-  if (coverBuffer) {
-    free(coverBuffer);
-    coverBuffer = nullptr;
-  }
-  coverBufferStored = false;
-}
+// ── Input / Render dispatchers ────────────────────────────────────────────────
 
 void HomeActivity::loop() {
-  const int menuCount = getMenuItemCount();
+  if (SETTINGS.uiTheme <= CrossPointSettings::LYRA_3_COVERS)
+    loopOriginal();
+  else if (SETTINGS.uiTheme == CrossPointSettings::CROSSPET_CLASSIC)
+    loopClassic();
+  else
+    loopCrossPet();
+}
 
-  buttonNavigator.onNext([this, menuCount] {
-    selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
-    requestUpdate();
-  });
+void HomeActivity::render(RenderLock&&) {
+  if (SETTINGS.uiTheme <= CrossPointSettings::LYRA_3_COVERS)
+    renderOriginal();
+  else if (SETTINGS.uiTheme == CrossPointSettings::CROSSPET_CLASSIC)
+    renderClassic();
+  else
+    renderCrossPet();
+}
 
-  buttonNavigator.onPrevious([this, menuCount] {
-    selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
-    requestUpdate();
-  });
+// ── Shared render helpers ─────────────────────────────────────────────────────
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    // Calculate dynamic indices based on which options are available
-    int idx = 0;
-    int menuSelectedIndex = selectorIndex - static_cast<int>(recentBooks.size());
-    const int myLibraryIdx = idx++;
-    const int recentsIdx = idx++;
-#ifndef DISABLE_OPDS
-    const int opdsLibraryIdx = hasOpdsUrl ? idx++ : -1;
-#else
-    const int opdsLibraryIdx = -1;
-#endif
-    const int fileTransferIdx = idx++;
-    const int settingsIdx = idx;
+void HomeActivity::renderPetStatusWidget(int headerH) {
+  if (!PET_SETTINGS.homeShowPetStatus) return;
+  if (!PET_MANAGER.exists() || !PET_MANAGER.isAlive()) return;
 
-    if (selectorIndex < recentBooks.size()) {
-      onSelectBook(recentBooks[selectorIndex].path);
-    } else if (menuSelectedIndex == myLibraryIdx) {
-      onMyLibraryOpen();
-    } else if (menuSelectedIndex == recentsIdx) {
-      onRecentsOpen();
-#ifndef DISABLE_OPDS
-    } else if (menuSelectedIndex == opdsLibraryIdx) {
-      if (onOpdsBrowserOpen) onOpdsBrowserOpen();
-#endif
-    } else if (menuSelectedIndex == fileTransferIdx) {
-      onFileTransferOpen();
-    } else if (menuSelectedIndex == settingsIdx) {
-      onSettingsOpen();
+  const auto& ps = PET_MANAGER.getState();
+  const PetMood mood = PET_MANAGER.getMood();
+  const int screenW = renderer.getScreenWidth();
+
+  const char* name = ps.petName[0] ? ps.petName : PetEvolution::variantStageName(ps.stage, ps.evolutionVariant);
+  char petBuf[64];
+
+  if (ps.hunger < 30)                 snprintf(petBuf, sizeof(petBuf), tr(STR_PET_HOME_HUNGRY), name);
+  else if (mood == PetMood::SAD)      snprintf(petBuf, sizeof(petBuf), tr(STR_PET_HOME_SAD), name);
+  else if (mood == PetMood::SICK)     snprintf(petBuf, sizeof(petBuf), tr(STR_PET_HOME_SICK), name);
+  else if (mood == PetMood::NEEDY)    snprintf(petBuf, sizeof(petBuf), tr(STR_PET_HOME_NEEDY), name);
+  else if (mood == PetMood::SLEEPING) snprintf(petBuf, sizeof(petBuf), tr(STR_PET_HOME_SLEEPING), name);
+  else if (ps.currentStreak > 7)      snprintf(petBuf, sizeof(petBuf), tr(STR_PET_HOME_STREAK), name, ps.currentStreak);
+  else if (mood == PetMood::HAPPY)    snprintf(petBuf, sizeof(petBuf), tr(STR_PET_HOME_HAPPY), name);
+  else                                snprintf(petBuf, sizeof(petBuf), tr(STR_PET_HOME_DEFAULT), name);
+
+  int rightMargin = 12 + BaseMetrics::values.batteryWidth + 4;
+  if (SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS) {
+    rightMargin += renderer.getTextWidth(SMALL_FONT_ID, "100%") + 4;
+  }
+  const int availW = screenW - rightMargin - 4;
+  auto truncated = renderer.truncatedText(SMALL_FONT_ID, petBuf, availW);
+  const int finalW = renderer.getTextWidth(SMALL_FONT_ID, truncated.c_str());
+  const int x = screenW - rightMargin - finalW;
+  renderer.drawText(SMALL_FONT_ID, x, 5, truncated.c_str(), true);
+}
+
+void HomeActivity::renderHeaderClock() {
+  if (!PET_SETTINGS.homeShowClock) return;
+
+  time_t now;
+  time(&now);
+  struct tm timeinfo;
+  localtime_r(&now, &timeinfo);
+  char buf[8];
+  if (timeinfo.tm_year >= 125)
+    snprintf(buf, sizeof(buf), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+  else
+    snprintf(buf, sizeof(buf), "--:--");
+
+  const int clockW = renderer.getTextWidth(SMALL_FONT_ID, buf);
+  renderer.drawText(SMALL_FONT_ID, 10, 5, buf);
+
+  if (!PET_SETTINGS.homeShowWeather) return;
+
+  // Weather temp or sync status next to clock
+  const int weatherX = 10 + clockW + 6;
+  if (weatherRefreshing) {
+    renderer.drawText(SMALL_FONT_ID, weatherX, 5, "...");
+  } else if (syncResultMsg) {
+    renderer.drawText(SMALL_FONT_ID, weatherX, 5, syncResultMsg);
+  } else {
+    WeatherData wData;
+    uint8_t wCity = 0;
+    char wTime[8] = "";
+    if (WeatherActivity::loadWeatherCache(wData, wCity, wTime, sizeof(wTime))) {
+      char wBuf[16];
+      snprintf(wBuf, sizeof(wBuf), "%.0f°C", wData.temperature);
+      renderer.drawText(SMALL_FONT_ID, weatherX, 5, wBuf);
     }
   }
 }
 
-void HomeActivity::render(Activity::RenderLock&&) {
-  auto metrics = UITheme::getInstance().getMetrics();
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto pageHeight = renderer.getScreenHeight();
+// ── Sync ──────────────────────────────────────────────────────────────────────
 
-  renderer.clearScreen();
-  bool bufferRestored = coverBufferStored && restoreCoverBuffer();
+void HomeActivity::performSyncAfterWifi() {
+  static char syncBuf[24];
+  weatherRefreshing = true;
+  requestUpdateAndWait();
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, nullptr);
-
-  GUI.drawRecentBookCover(renderer, Rect{0, metrics.homeTopPadding, pageWidth, metrics.homeCoverTileHeight},
-                          recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
-                          std::bind(&HomeActivity::storeCoverBuffer, this));
-
-  // Build menu items dynamically
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
-                                        tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings};
-
-#ifndef DISABLE_OPDS
-  if (hasOpdsUrl) {
-    // Insert OPDS Browser after My Library
-    menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
-    menuIcons.insert(menuIcons.begin() + 2, Library);
+  if (WiFi.status() != WL_CONNECTED) {
+    const auto& ssid = WIFI_STORE.getLastConnectedSsid();
+    const auto* cred = ssid.empty() ? nullptr : WIFI_STORE.findCredential(ssid);
+    if (cred) {
+      WiFi.mode(WIFI_STA);
+      WiFi.begin(cred->ssid.c_str(), cred->password.c_str());
+      const unsigned long connectStart = millis();
+      while (WiFi.status() != WL_CONNECTED && millis() - connectStart < 8000) {
+        delay(100);
+      }
+      if (WiFi.status() != WL_CONNECTED) {
+        WiFi.disconnect(false);
+        WiFi.mode(WIFI_OFF);
+        if (SETTINGS.bleEnabled) { BluetoothHIDManager::getInstance().enable(); }
+        weatherRefreshing = false;
+        snprintf(syncBuf, sizeof(syncBuf), "%s", tr(STR_WIFI_CONN_FAILED));
+        syncResultMsg = syncBuf;
+        syncResultExpiry = millis() + 3000;
+        requestUpdate();
+        return;
+      }
+    }
   }
-#endif
 
-  GUI.drawButtonMenu(
-      renderer,
-      Rect{0, metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.verticalSpacing, pageWidth,
-           pageHeight - (metrics.headerHeight + metrics.homeTopPadding + metrics.verticalSpacing * 2 +
-                         metrics.buttonHintsHeight)},
-      static_cast<int>(menuItems.size()), selectorIndex - recentBooks.size(),
-      [&menuItems](int index) { return std::string(menuItems[index]); },
-      [&menuIcons](int index) { return menuIcons[index]; });
-
-  const auto labels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
-  renderer.displayBuffer();
-
-  if (!firstRenderDone) {
-    firstRenderDone = true;
-    requestUpdate();
-  } else if (!recentsLoaded && !recentsLoading) {
-    recentsLoading = true;
-    loadRecentCovers(metrics.homeCoverHeight);
-  }
+  int rc = WeatherActivity::silentRefresh();
+  if (SETTINGS.bleEnabled) { BluetoothHIDManager::getInstance().enable(); }
+  weatherRefreshing = false;
+  if (rc == 0)      snprintf(syncBuf, sizeof(syncBuf), "%s", tr(STR_SYNC_OK));
+  else if (rc == 2) snprintf(syncBuf, sizeof(syncBuf), "%s", tr(STR_WIFI_TIMEOUT));
+  else              snprintf(syncBuf, sizeof(syncBuf), tr(STR_API_ERROR), rc);
+  syncResultMsg = syncBuf;
+  syncResultExpiry = millis() + 3000;
+  coverRendered = false;
+  requestUpdate();
 }
+
+void HomeActivity::doSync() {
+  static char syncBuf2[24];
+  if (WIFI_STORE.getLastConnectedSsid().empty()) {
+    snprintf(syncBuf2, sizeof(syncBuf2), "%s", tr(STR_WIFI_CONN_FAILED));
+    syncResultMsg = syncBuf2;
+    syncResultExpiry = millis() + 3000;
+    requestUpdate();
+    return;
+  }
+  BluetoothHIDManager::getInstance().disable();
+  performSyncAfterWifi();
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+
+void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path); }
+void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
+void HomeActivity::onRecentBooksOpen() { activityManager.goToRecentBooks(); }
+void HomeActivity::onVirtualPetOpen()  { activityManager.goToVirtualPet(); }
+void HomeActivity::onFileTransferOpen(){ activityManager.goToFileTransfer(); }
+void HomeActivity::onSettingsOpen()    { activityManager.goToSettings(); }
+void HomeActivity::onToolsOpen()       { activityManager.goToTools(); }

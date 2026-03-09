@@ -9,39 +9,39 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <SPI.h>
+#include <WiFi.h>
 #include <builtinFonts/all.h>
-#include <BluetoothHIDManager.h>
 
 #include <cstring>
+#include <sys/time.h>
 
-#include "Battery.h"
+#include <esp_private/esp_clk.h>
+#include <esp_sntp.h>
+
+#include "CrossPetSettings.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
+#include "GameScores.h"
+#include "ReadingStats.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
-#include "activities/boot_sleep/BootActivity.h"
-#include "activities/boot_sleep/SleepActivity.h"
-#ifndef DISABLE_OPDS
-#include "activities/browser/OpdsBookBrowserActivity.h"
-#endif
-#include "activities/home/HomeActivity.h"
-#include "activities/home/MyLibraryActivity.h"
-#include "activities/home/RecentBooksActivity.h"
-#include "activities/network/CrossPointWebServerActivity.h"
-#include "activities/reader/ReaderActivity.h"
-#include "activities/settings/SettingsActivity.h"
-#include "activities/util/FullScreenMessageActivity.h"
+#include "activities/Activity.h"
+#include "activities/ActivityManager.h"
+#include <BluetoothHIDManager.h>
+#include "pet/PetManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/ButtonNavigator.h"
+#include "util/ScreenshotUtil.h"
+#include "activities/tools/ReadingStatsActivity.h"
 
 HalDisplay display;
 HalGPIO gpio;
 MappedInputManager mappedInputManager(gpio);
 GfxRenderer renderer(display);
+ActivityManager activityManager(renderer, mappedInputManager);
 FontDecompressor fontDecompressor;
-Activity* currentActivity;
 
 // Fonts
 EpdFont bookerly14RegularFont(&bookerly_14_regular);
@@ -95,59 +95,97 @@ EpdFont notosans18BoldItalicFont(&notosans_18_bolditalic);
 EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont,
                                    &notosans18BoldItalicFont);
 
-EpdFont opendyslexic8RegularFont(&opendyslexic_8_regular);
-EpdFont opendyslexic8BoldFont(&opendyslexic_8_bold);
-EpdFont opendyslexic8ItalicFont(&opendyslexic_8_italic);
-EpdFont opendyslexic8BoldItalicFont(&opendyslexic_8_bolditalic);
-EpdFontFamily opendyslexic8FontFamily(&opendyslexic8RegularFont, &opendyslexic8BoldFont, &opendyslexic8ItalicFont,
-                                      &opendyslexic8BoldItalicFont);
-EpdFont opendyslexic10RegularFont(&opendyslexic_10_regular);
-EpdFont opendyslexic10BoldFont(&opendyslexic_10_bold);
-EpdFont opendyslexic10ItalicFont(&opendyslexic_10_italic);
-EpdFont opendyslexic10BoldItalicFont(&opendyslexic_10_bolditalic);
-EpdFontFamily opendyslexic10FontFamily(&opendyslexic10RegularFont, &opendyslexic10BoldFont, &opendyslexic10ItalicFont,
-                                       &opendyslexic10BoldItalicFont);
-EpdFont opendyslexic12RegularFont(&opendyslexic_12_regular);
-EpdFont opendyslexic12BoldFont(&opendyslexic_12_bold);
-EpdFont opendyslexic12ItalicFont(&opendyslexic_12_italic);
-EpdFont opendyslexic12BoldItalicFont(&opendyslexic_12_bolditalic);
-EpdFontFamily opendyslexic12FontFamily(&opendyslexic12RegularFont, &opendyslexic12BoldFont, &opendyslexic12ItalicFont,
-                                       &opendyslexic12BoldItalicFont);
-EpdFont opendyslexic14RegularFont(&opendyslexic_14_regular);
-EpdFont opendyslexic14BoldFont(&opendyslexic_14_bold);
-EpdFont opendyslexic14ItalicFont(&opendyslexic_14_italic);
-EpdFont opendyslexic14BoldItalicFont(&opendyslexic_14_bolditalic);
-EpdFontFamily opendyslexic14FontFamily(&opendyslexic14RegularFont, &opendyslexic14BoldFont, &opendyslexic14ItalicFont,
-                                       &opendyslexic14BoldItalicFont);
 #endif  // OMIT_FONTS
+
+// Bokerlam reader fonts (no BoldItalic available — uses Italic as fallback)
+EpdFont bokerlam12RegularFont(&bokerlam_12_regular);
+EpdFont bokerlam12BoldFont(&bokerlam_12_bold);
+EpdFont bokerlam12ItalicFont(&bokerlam_12_italic);
+EpdFontFamily bokerlam12FontFamily(&bokerlam12RegularFont, &bokerlam12BoldFont, &bokerlam12ItalicFont, &bokerlam12ItalicFont);
+EpdFont bokerlam14RegularFont(&bokerlam_14_regular);
+EpdFont bokerlam14BoldFont(&bokerlam_14_bold);
+EpdFont bokerlam14ItalicFont(&bokerlam_14_italic);
+EpdFontFamily bokerlam14FontFamily(&bokerlam14RegularFont, &bokerlam14BoldFont, &bokerlam14ItalicFont, &bokerlam14ItalicFont);
+EpdFont bokerlam16RegularFont(&bokerlam_16_regular);
+EpdFont bokerlam16BoldFont(&bokerlam_16_bold);
+EpdFont bokerlam16ItalicFont(&bokerlam_16_italic);
+EpdFontFamily bokerlam16FontFamily(&bokerlam16RegularFont, &bokerlam16BoldFont, &bokerlam16ItalicFont, &bokerlam16ItalicFont);
+EpdFont bokerlam18RegularFont(&bokerlam_18_regular);
+EpdFont bokerlam18BoldFont(&bokerlam_18_bold);
+EpdFont bokerlam18ItalicFont(&bokerlam_18_italic);
+EpdFontFamily bokerlam18FontFamily(&bokerlam18RegularFont, &bokerlam18BoldFont, &bokerlam18ItalicFont, &bokerlam18ItalicFont);
 
 EpdFont smallFont(&notosans_8_regular);
 EpdFontFamily smallFontFamily(&smallFont);
 
-EpdFont ui10RegularFont(&ubuntu_10_regular);
-EpdFont ui10BoldFont(&ubuntu_10_bold);
-EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
+// UI fonts use Noto Sans for full glyph coverage (symbols, Vietnamese)
+EpdFontFamily ui12FontFamily(&notosans12RegularFont, &notosans12BoldFont);
 
-EpdFont ui12RegularFont(&ubuntu_12_regular);
-EpdFont ui12BoldFont(&ubuntu_12_bold);
-EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
+// RTC memory persists across deep sleep — used to restore clock with elapsed time correction.
+// Magic sentinel confirms the values were set by a clean sleep entry (not stale/garbage).
+static constexpr uint32_t SLEEP_RTC_MAGIC = 0x43524C4B;  // "CRLK"
+RTC_DATA_ATTR static uint32_t g_rtcSleepMagic = 0;
+RTC_DATA_ATTR static int64_t  g_rtcUsBeforeSleep = 0;    // esp_clk_rtc_time() before sleep
+RTC_DATA_ATTR static uint32_t g_unixBeforeSleep = 0;     // time(nullptr) before sleep
+
+// True when system clock was restored from backup (may have drift from deep sleep).
+// Reset to false after a fresh NTP sync. Used by clock UI to show "~" approximate indicator.
+bool g_clockApproximate = false;
+
+// SNTP callback — clears approximate flag when NTP sync completes
+static void onNtpSyncComplete(struct timeval* tv) {
+  g_clockApproximate = false;
+  LOG_DBG("NTP", "Time synced, clock is now accurate");
+}
+
+// SD-based clock backup — reliable fallback when RTC_DATA_ATTR is lost on ESP32-C3.
+// Saves unix timestamp + RTC timer value. On wake, RTC timer is still running so we can
+// compute elapsed sleep duration even without RTC memory.
+static constexpr char CLOCK_BACKUP_PATH[] = "/.crosspoint/clock.bin";
+
+struct ClockBackup {
+  uint32_t unixTime;    // time(nullptr) at sleep entry
+  int64_t  rtcTimeUs;   // esp_clk_rtc_time() at sleep entry
+};
+
+void saveClockToSD() {
+  uint32_t now = (uint32_t)time(nullptr);
+  if (now < 1700000000UL) return;  // don't save invalid time (before ~2023)
+  ClockBackup backup = {now, esp_clk_rtc_time()};
+  FsFile f;
+  if (Storage.openFileForWrite("CLK", CLOCK_BACKUP_PATH, f)) {
+    f.write((const uint8_t*)&backup, sizeof(backup));
+    f.close();
+  }
+}
+
+bool restoreClockFromSD() {
+  FsFile f;
+  if (!Storage.openFileForRead("CLK", CLOCK_BACKUP_PATH, f)) return false;
+  ClockBackup backup = {};
+  bool ok = (f.read((uint8_t*)&backup, sizeof(backup)) == sizeof(backup));
+  f.close();
+  if (!ok || backup.unixTime < 1700000000UL) return false;
+
+  // Compute elapsed time using RTC timer (keeps running during deep sleep)
+  int64_t rtcNow = esp_clk_rtc_time();
+  uint32_t elapsedSec = 0;
+  if (rtcNow > backup.rtcTimeUs) {
+    elapsedSec = (uint32_t)((rtcNow - backup.rtcTimeUs) / 1000000LL);
+  }
+  time_t corrected = (time_t)backup.unixTime + elapsedSec;
+  struct timeval tv = {corrected, 0};
+  settimeofday(&tv, nullptr);
+  LOG_DBG("MAIN", "Clock restored from SD: base=%lu + %us elapsed", (unsigned long)backup.unixTime, elapsedSec);
+  return true;
+}
 
 // measurement of power button press duration calibration value
 unsigned long t1 = 0;
 unsigned long t2 = 0;
 
-void exitActivity() {
-  if (currentActivity) {
-    currentActivity->onExit();
-    delete currentActivity;
-    currentActivity = nullptr;
-  }
-}
-
-void enterNewActivity(Activity* activity) {
-  currentActivity = activity;
-  currentActivity->onEnter();
-}
+// Forward declaration — defined later in setup section
+void setupDisplayAndFonts();
 
 // Verify power button press duration on wake-up from deep sleep
 // Pre-condition: isWakeupByPowerButton() == true
@@ -188,6 +226,13 @@ void verifyPowerButtonDuration() {
 
   if (abort) {
     // Button released too early. Returning to sleep.
+    // Refresh dynamic sleep screens (clock, reading stats) so the display isn't stale.
+    const auto mode = SETTINGS.sleepScreen;
+    if (mode == CrossPointSettings::SLEEP_SCREEN_MODE::CLOCK ||
+        mode == CrossPointSettings::SLEEP_SCREEN_MODE::READING_STATS) {
+      setupDisplayAndFonts();
+      activityManager.goToSleep();
+    }
     // IMPORTANT: Re-arm the wakeup trigger before sleeping again
     powerManager.startDeepSleep(gpio);
   }
@@ -203,85 +248,38 @@ void waitForPowerRelease() {
 
 // Enter deep sleep mode
 void enterDeepSleep() {
-  APP_STATE.lastSleepFromReader = currentActivity && currentActivity->isReaderActivity();
+  HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
+  APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
   APP_STATE.saveToFile();
-  
-  // CRITICAL: Disable Bluetooth before deep sleep to save power
-  try {
+
+  activityManager.goToSleep();
+
+  // Disable Bluetooth before deep sleep
+  {
     auto& btMgr = BluetoothHIDManager::getInstance();
     if (btMgr.isEnabled()) {
-      LOG_INF("SLP", "Disabling Bluetooth before deep sleep");
       btMgr.disable();
     }
-  } catch (...) {
-    LOG_DBG("SLP", "Could not disable Bluetooth");
   }
-  
-  exitActivity();
-  enterNewActivity(new SleepActivity(renderer, mappedInputManager));
-
-  display.deepSleep();
   LOG_DBG("MAIN", "Power button press calibration value: %lu ms", t2 - t1);
   LOG_DBG("MAIN", "Entering deep sleep");
 
+  // Snapshot time + RTC counter for accurate clock restoration on wake.
+  // The LP/RTC timer (esp_clk_rtc_time) keeps running during deep sleep.
+  g_unixBeforeSleep  = (uint32_t)time(nullptr);
+  g_rtcUsBeforeSleep = esp_clk_rtc_time();
+  g_rtcSleepMagic    = SLEEP_RTC_MAGIC;
+
+  // Also save to SD as reliable fallback (RTC_DATA_ATTR can be lost on some ESP32-C3 boards)
+  saveClockToSD();
+
   powerManager.startDeepSleep(gpio);
-}
-
-void onGoHome();
-void onGoToMyLibraryWithPath(const std::string& path);
-void onGoToRecentBooks();
-void onGoToReader(const std::string& initialEpubPath) {
-  const std::string bookPath = initialEpubPath;  // Copy before exitActivity() invalidates the reference
-  exitActivity();
-  enterNewActivity(new ReaderActivity(renderer, mappedInputManager, bookPath, onGoHome, onGoToMyLibraryWithPath));
-}
-
-void onGoToFileTransfer() {
-  exitActivity();
-  enterNewActivity(new CrossPointWebServerActivity(renderer, mappedInputManager, onGoHome));
-}
-
-void onGoToSettings() {
-  exitActivity();
-  enterNewActivity(new SettingsActivity(renderer, mappedInputManager, onGoHome));
-}
-
-void onGoToMyLibrary() {
-  exitActivity();
-  enterNewActivity(new MyLibraryActivity(renderer, mappedInputManager, onGoHome, onGoToReader));
-}
-
-void onGoToRecentBooks() {
-  exitActivity();
-  enterNewActivity(new RecentBooksActivity(renderer, mappedInputManager, onGoHome, onGoToReader));
-}
-
-void onGoToMyLibraryWithPath(const std::string& path) {
-  exitActivity();
-  enterNewActivity(new MyLibraryActivity(renderer, mappedInputManager, onGoHome, onGoToReader, path));
-}
-
-#ifndef DISABLE_OPDS
-void onGoToBrowser() {
-  exitActivity();
-  enterNewActivity(new OpdsBookBrowserActivity(renderer, mappedInputManager, onGoHome));
-}
-#endif
-
-void onGoHome() {
-  exitActivity();
-#ifdef DISABLE_OPDS
-  enterNewActivity(new HomeActivity(renderer, mappedInputManager, onGoToReader, onGoToMyLibrary, onGoToRecentBooks,
-                                    onGoToSettings, onGoToFileTransfer, nullptr));
-#else
-  enterNewActivity(new HomeActivity(renderer, mappedInputManager, onGoToReader, onGoToMyLibrary, onGoToRecentBooks,
-                                    onGoToSettings, onGoToFileTransfer, onGoToBrowser));
-#endif
 }
 
 void setupDisplayAndFonts() {
   display.begin();
   renderer.begin();
+  activityManager.begin();
   LOG_DBG("MAIN", "Display initialized");
 
   // Initialize font decompressor for compressed reader fonts
@@ -299,12 +297,12 @@ void setupDisplayAndFonts() {
   renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
-  renderer.insertFont(OPENDYSLEXIC_8_FONT_ID, opendyslexic8FontFamily);
-  renderer.insertFont(OPENDYSLEXIC_10_FONT_ID, opendyslexic10FontFamily);
-  renderer.insertFont(OPENDYSLEXIC_12_FONT_ID, opendyslexic12FontFamily);
-  renderer.insertFont(OPENDYSLEXIC_14_FONT_ID, opendyslexic14FontFamily);
+  renderer.insertFont(BOKERLAM_12_FONT_ID, bokerlam12FontFamily);
+  renderer.insertFont(BOKERLAM_14_FONT_ID, bokerlam14FontFamily);
+  renderer.insertFont(BOKERLAM_16_FONT_ID, bokerlam16FontFamily);
+  renderer.insertFont(BOKERLAM_18_FONT_ID, bokerlam18FontFamily);
 #endif  // OMIT_FONTS
-  renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
+  renderer.insertFont(UI_10_FONT_ID, ui12FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
   LOG_DBG("MAIN", "Fonts setup");
@@ -331,26 +329,80 @@ void setup() {
   if (!Storage.begin()) {
     LOG_ERR("MAIN", "SD card initialization failed");
     setupDisplayAndFonts();
-    exitActivity();
-    enterNewActivity(new FullScreenMessageActivity(renderer, mappedInputManager, "SD card error", EpdFontFamily::BOLD));
+    activityManager.goToFullScreenMessage("SD card error", EpdFontFamily::BOLD);
     return;
   }
 
   SETTINGS.loadFromFile();
+  PET_SETTINGS.loadFromFile();
   I18N.loadSettings();
   KOREADER_STORE.loadFromFile();
+  READ_STATS.loadFromFile();   // loaded early so abort-to-sleep paths show correct stats
+  GAME_SCORES.loadFromFile();
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
-  
-  // Initialize Bluetooth HID button injection
-  try {
+
+  // Register NTP sync callback to clear approximate clock flag
+  sntp_set_time_sync_notification_cb(onNtpSyncComplete);
+
+  // Restore system clock after deep sleep.
+  // Strategy 1: RTC memory + LP timer elapsed correction (most accurate)
+  // Strategy 2: SD card backup (reliable fallback when RTC_DATA_ATTR lost on ESP32-C3)
+  // Strategy 3: Pet state savedTime (last resort, handled in PetPersistence::load())
+  {
+    time_t now = time(nullptr);
+    struct tm check;
+    gmtime_r(&now, &check);
+    bool clockValid = (check.tm_year >= 125);  // year >= 2025
+
+    if (!clockValid && g_rtcSleepMagic == SLEEP_RTC_MAGIC && g_unixBeforeSleep > 0) {
+      // Strategy 1: RTC memory with elapsed time correction
+      int64_t rtcNow      = esp_clk_rtc_time();
+      uint32_t elapsedSec = 0;
+      if (rtcNow > g_rtcUsBeforeSleep) {
+        elapsedSec = (uint32_t)((rtcNow - g_rtcUsBeforeSleep) / 1000000LL);
+      }
+      time_t corrected = (time_t)g_unixBeforeSleep + elapsedSec;
+      struct timeval tv = {corrected, 0};
+      settimeofday(&tv, nullptr);
+      clockValid = true;
+      g_clockApproximate = true;  // RTC timer drifts during deep sleep
+      LOG_DBG("MAIN", "Clock restored via RTC: base=%lu + %us elapsed", g_unixBeforeSleep, elapsedSec);
+    }
+
+    if (!clockValid) {
+      // Strategy 2: SD card backup (time will be slightly behind by sleep duration)
+      clockValid = restoreClockFromSD();
+      if (clockValid) g_clockApproximate = true;
+    }
+
+    g_rtcSleepMagic = 0;  // consume — next boot treats as cold boot unless we sleep again
+  }
+
+  // Set timezone to UTC+7 (ICT — Indochina Time) so localtime_r() returns local time.
+  // This must happen after settimeofday() and before any localtime_r() calls.
+  setenv("TZ", "ICT-7", 1);
+  tzset();
+
+  // Load virtual pet state and apply time-based decay
+  PET_MANAGER.load();
+  PET_MANAGER.tick();
+
+  // Initialize Bluetooth HID if enabled
+  {
     auto& btMgr = BluetoothHIDManager::getInstance();
+    // Set up button injection callback
     btMgr.setButtonInjector([](uint8_t buttonIndex) {
       gpio.injectButtonPress(buttonIndex);
     });
-    LOG_INF("MAIN", "Bluetooth HID initialized with button injection");
-  } catch (...) {
-    LOG_ERR("MAIN", "Failed to initialize Bluetooth HID");
+    // Enable BLE and start auto-reconnect if configured
+    if (SETTINGS.bleEnabled) {
+      if (btMgr.enable()) {
+        if (strlen(SETTINGS.bleBondedDeviceAddr) > 0) {
+          btMgr.autoReconnect(SETTINGS.bleBondedDeviceAddr, SETTINGS.bleBondedDeviceAddrType);
+        }
+      }
+    }
   }
 
   switch (gpio.getWakeupReason()) {
@@ -376,8 +428,7 @@ void setup() {
 
   setupDisplayAndFonts();
 
-  exitActivity();
-  enterNewActivity(new BootActivity(renderer, mappedInputManager));
+  activityManager.goToBoot();
 
   APP_STATE.loadFromFile();
   RECENT_BOOKS.loadFromFile();
@@ -386,17 +437,17 @@ void setup() {
   // crashed (indicated by readerActivityLoadCount > 0)
   if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
       mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
-    onGoHome();
+    activityManager.goHome();
   } else {
     // Clear app state to avoid getting into a boot loop if the epub doesn't load
     const auto path = APP_STATE.openEpubPath;
     APP_STATE.openEpubPath = "";
     APP_STATE.readerActivityLoadCount++;
     APP_STATE.saveToFile();
-    onGoToReader(path);
+    activityManager.goToReader(path);
   }
 
-  // Ensure we're not still holding the power button before leaving setup
+  // Ensure we're not still holding the power button before leaving setup.
   waitForPowerRelease();
 }
 
@@ -407,19 +458,34 @@ void loop() {
 
   gpio.update();
 
-  // Check for Bluetooth inactivity timeouts and auto-reconnect
-  try {
-    BluetoothHIDManager::getInstance().updateActivity();
-    BluetoothHIDManager::getInstance().checkAutoReconnect();
-  } catch (...) {
-    // Ignore errors in Bluetooth management
+  // Handle BLE enable/disable from settings toggle.
+  // Skip re-init if WiFi is active (BLE and WiFi are mutually exclusive on ESP32-C3).
+  // WiFi activities call btMgr.disable() on enter and btMgr.enable() on exit.
+  {
+    auto& btMgr = BluetoothHIDManager::getInstance();
+    if (SETTINGS.bleEnabled) {
+      if (!btMgr.isEnabled() && WiFi.getMode() == WIFI_OFF) {
+        // Re-enable BLE (e.g. after WiFi activity closed without calling resume)
+        if (btMgr.enable()) {
+          if (strlen(SETTINGS.bleBondedDeviceAddr) > 0) {
+            btMgr.autoReconnect(SETTINGS.bleBondedDeviceAddr, SETTINGS.bleBondedDeviceAddrType);
+          }
+        }
+      }
+      if (btMgr.isEnabled()) {
+        btMgr.updateActivity();
+        btMgr.checkAutoReconnect();
+      }
+    } else if (btMgr.isEnabled()) {
+      btMgr.disable();
+    }
   }
 
   renderer.setFadingFix(SETTINGS.fadingFix);
 
   if (Serial && millis() - lastMemPrint >= 10000) {
-    LOG_INF("MEM", "Free: %d bytes, Total: %d bytes, Min Free: %d bytes", ESP.getFreeHeap(), ESP.getHeapSize(),
-            ESP.getMinFreeHeap());
+    LOG_INF("MEM", "Free: %d bytes, Total: %d bytes, Min Free: %d bytes, MaxAlloc: %d bytes", ESP.getFreeHeap(),
+            ESP.getHeapSize(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
     lastMemPrint = millis();
   }
 
@@ -441,27 +507,23 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  
-  // Check for physical button presses, virtual button presses, or activity prevention
-  bool hasActivity = gpio.wasAnyPressed() || gpio.wasAnyReleased() || 
-                     (currentActivity && currentActivity->preventAutoSleep());
-  
-  // Also check for recent BLE activity to prevent power sleep during BLE use
-  try {
-    const auto& btMgr = BluetoothHIDManager::getInstance();
-    if (btMgr.isEnabled()) {
-      // If BLE is enabled, check if there's been recent activity
-      // We consider that activity if the manager has been tracking it
-      // (This prevents the system from sleeping while using BLE controller)
-      hasActivity = hasActivity || btMgr.hasRecentActivity();
-    }
-  } catch (...) {
-    // Ignore BLE check errors
-  }
-  
-  if (hasActivity) {
+  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || activityManager.preventAutoSleep()) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
+  }
+
+  static bool screenshotButtonsReleased = true;
+  if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(HalGPIO::BTN_DOWN)) {
+    if (screenshotButtonsReleased) {
+      screenshotButtonsReleased = false;
+      {
+        RenderLock lock;
+        ScreenshotUtil::takeScreenshot(renderer);
+      }
+    }
+    return;
+  } else {
+    screenshotButtonsReleased = true;
   }
 
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
@@ -473,15 +535,35 @@ void loop() {
   }
 
   if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.getHeldTime() > SETTINGS.getPowerButtonDuration()) {
+    // If the screenshot combination is potentially being pressed, don't sleep
+    if (gpio.isPressed(HalGPIO::BTN_DOWN)) {
+      return;
+    }
     enterDeepSleep();
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
     return;
   }
 
-  const unsigned long activityStartTime = millis();
-  if (currentActivity) {
-    currentActivity->loop();
+  // Short power button press = full screen refresh (clears e-ink ghosting)
+  // Debounce: ignore repeated triggers within 2s to prevent multiple refreshes
+  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SCREEN_REFRESH &&
+      gpio.wasReleased(HalGPIO::BTN_POWER)) {
+    static unsigned long lastRefreshMs = 0;
+    if (millis() - lastRefreshMs > 2000) {
+      lastRefreshMs = millis();
+      renderer.requestNextHalfRefresh();
+      activityManager.requestUpdate();
+    }
   }
+
+  // Short power button press = open reading stats activity
+  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::READING_STATS_VIEW &&
+      gpio.wasReleased(HalGPIO::BTN_POWER)) {
+    activityManager.pushActivity(std::make_unique<ReadingStatsActivity>(renderer, mappedInputManager));
+  }
+
+  const unsigned long activityStartTime = millis();
+  activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;
 
   const unsigned long loopDuration = millis() - loopStartTime;
@@ -495,7 +577,7 @@ void loop() {
   // Add delay at the end of the loop to prevent tight spinning
   // When an activity requests skip loop delay (e.g., webserver running), use yield() for faster response
   // Otherwise, use longer delay to save power
-  if (currentActivity && currentActivity->skipLoopDelay()) {
+  if (activityManager.skipLoopDelay()) {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {

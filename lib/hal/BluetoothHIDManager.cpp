@@ -4,6 +4,12 @@
 #include <HalGPIO.h>
 #include <WiFi.h>
 
+// Prevent Arduino from releasing BLE controller memory at boot.
+// NimBLE-Arduino 2.x doesn't include esp32-hal-bt-mem.h, so btInUse() returns
+// false and initArduino() frees BLE memory via esp_bt_controller_mem_release().
+// Subsequent NimBLEDevice::init() → esp_bt_controller_init() then crashes.
+extern "C" bool btInUse(void) { return true; }
+
 // HID Service and characteristic UUIDs
 static const char* HID_SERVICE_UUID = "1812";
 static const char* HID_REPORT_UUID = "2A4D";
@@ -221,6 +227,11 @@ void BluetoothHIDManager::onScanResult(NimBLEAdvertisedDevice* advertisedDevice)
     if (dev.address == address) {
       dev.rssi = rssi; // Update RSSI
       if (isHID) dev.isHID = true;
+      // Auto-connect if this matches our auto-reconnect address
+      if (!_autoReconnectAddr.empty() && address == _autoReconnectAddr && !isConnected(address)) {
+        LOG_INF("BT", "Found auto-reconnect device %s, connecting...", address.c_str());
+        connectToDevice(address);
+      }
       return;
     }
   }
@@ -240,6 +251,12 @@ void BluetoothHIDManager::onScanResult(NimBLEAdvertisedDevice* advertisedDevice)
   
   LOG_DBG("BT", "Found device: %s (%s) RSSI:%d HID:%d", 
           device.name.c_str(), device.address.c_str(), rssi, isHID);
+
+  // Auto-connect if this matches our auto-reconnect address
+  if (!_autoReconnectAddr.empty() && address == _autoReconnectAddr && !isConnected(address)) {
+    LOG_INF("BT", "Found auto-reconnect device %s, connecting...", address.c_str());
+    connectToDevice(address);
+  }
 }
 
 bool BluetoothHIDManager::connectToDevice(const std::string& address) {
@@ -732,13 +749,31 @@ void BluetoothHIDManager::checkAutoReconnect() {
   }
 }
 
+void BluetoothHIDManager::autoReconnect(const char* address, uint8_t addrType) {
+  if (!address || strlen(address) == 0) {
+    return;
+  }
+  // If already connected, nothing to do
+  if (isConnected(address)) {
+    LOG_INF("BT", "Already connected to %s", address);
+    return;
+  }
+  // Store the address for auto-reconnect during scanning
+  _autoReconnectAddr = std::string(address);
+  LOG_INF("BT", "Setting auto-reconnect target: %s", address);
+  // Start a background scan to find and connect to the device
+  if (!_scanning) {
+    startScan(30000);  // 30 second scan to find the device
+  }
+}
+
 void BluetoothHIDManager::saveState() {
   LOG_DBG("BT", "Saving state (stub)");
-  // Stub: would save paired devices to file
+  // State is persisted via CrossPointSettings (bleEnabled, bleBondedDeviceAddr, etc.)
 }
 
 void BluetoothHIDManager::loadState() {
   LOG_DBG("BT", "Loading state (stub)");
-  // Stub: would load paired devices from file
+  // State is loaded from CrossPointSettings in main.cpp via autoReconnect()
 }
 

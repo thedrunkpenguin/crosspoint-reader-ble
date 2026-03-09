@@ -66,6 +66,9 @@ public:
   // Used by power manager to prevent sleep during BLE use
   bool hasRecentActivity() const;
 
+  // Auto-reconnect to a specific device address (called from main.cpp with stored address)
+  void autoReconnect(const char* address, uint8_t addrType = 0);
+
   // State persistence
   void saveState();
   void loadState();
@@ -89,6 +92,8 @@ private:
 
   bool _enabled = false;
   bool _scanning = false;
+  bool _suspended = false;         // True when suspended for WiFi use
+  std::string _autoReconnectAddr;  // Address of device to auto-reconnect to on next scan
   std::vector<BluetoothDevice> _discoveredDevices;
   std::vector<ConnectedDevice> _connectedDevices;
   std::function<void(uint16_t)> _inputCallback;

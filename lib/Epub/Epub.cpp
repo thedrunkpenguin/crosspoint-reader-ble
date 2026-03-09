@@ -1,5 +1,6 @@
 #include "Epub.h"
 
+#include <Arduino.h>  // yield()
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
@@ -396,6 +397,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     return false;
   }
   LOG_DBG("EBP", "OPF pass completed in %lu ms", millis() - opfStart);
+  yield();  // Feed watchdog between heavy parsing passes
 
   // TOC Pass - try EPUB 3 nav first, fall back to NCX
   const uint32_t tocStart = millis();
@@ -428,6 +430,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     return false;
   }
   LOG_DBG("EBP", "TOC pass completed in %lu ms", millis() - tocStart);
+  yield();  // Feed watchdog between heavy parsing passes
 
   // Close the cache files
   if (!bookMetadataCache->endWrite()) {
@@ -442,6 +445,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     return false;
   }
   LOG_DBG("EBP", "buildBookBin completed in %lu ms", millis() - buildStart);
+  yield();  // Feed watchdog after heavy I/O
   LOG_DBG("EBP", "Total indexing completed in %lu ms", millis() - indexingStart);
 
   if (!bookMetadataCache->cleanupTmpFiles()) {
@@ -541,8 +545,12 @@ bool Epub::generateCoverBmp(bool cropped) const {
     return false;
   }
 
-  if (coverImageHref.substr(coverImageHref.length() - 4) == ".jpg" ||
-      coverImageHref.substr(coverImageHref.length() - 5) == ".jpeg") {
+  const auto len = coverImageHref.length();
+  const bool isJpg = (len >= 4 && coverImageHref.substr(len - 4) == ".jpg") ||
+                     (len >= 5 && coverImageHref.substr(len - 5) == ".jpeg");
+  const bool isPng = len >= 4 && coverImageHref.substr(len - 4) == ".png";
+
+  if (isJpg) {
     LOG_DBG("EBP", "Generating BMP from JPG cover image (%s mode)", cropped ? "cropped" : "fit");
     const auto coverJpgTempPath = getCachePath() + "/.cover.jpg";
 
@@ -575,7 +583,7 @@ bool Epub::generateCoverBmp(bool cropped) const {
     return success;
   }
 
-  if (coverImageHref.substr(coverImageHref.length() - 4) == ".png") {
+  if (isPng) {
     LOG_DBG("EBP", "Generating BMP from PNG cover image (%s mode)", cropped ? "cropped" : "fit");
     const auto coverPngTempPath = getCachePath() + "/.cover.png";
 
@@ -627,11 +635,15 @@ bool Epub::generateThumbBmp(int height) const {
   }
 
   const auto coverImageHref = bookMetadataCache->coreMetadata.coverItemHref;
+  const auto thumbLen = coverImageHref.length();
+  const bool thumbIsJpg = (thumbLen >= 4 && coverImageHref.substr(thumbLen - 4) == ".jpg") ||
+                          (thumbLen >= 5 && coverImageHref.substr(thumbLen - 5) == ".jpeg");
+  const bool thumbIsPng = thumbLen >= 4 && coverImageHref.substr(thumbLen - 4) == ".png";
+
   if (coverImageHref.empty()) {
     LOG_DBG("EBP", "No known cover image for thumbnail");
-  } else if (coverImageHref.substr(coverImageHref.length() - 4) == ".jpg" ||
-             coverImageHref.substr(coverImageHref.length() - 5) == ".jpeg") {
-    LOG_DBG("EBP", "Generating thumb BMP from JPG cover image (lightweight mode)");
+  } else if (thumbIsJpg) {
+    LOG_DBG("EBP", "Generating thumb BMP from JPG cover image");
     const auto coverJpgTempPath = getCachePath() + "/.cover.jpg";
 
     FsFile coverJpg;
@@ -650,27 +662,24 @@ bool Epub::generateThumbBmp(int height) const {
       coverJpg.close();
       return false;
     }
-    
-    // Use VERY small target size to avoid memory exhaustion in JPEG decoder
-    // TARGET: 120x180 pixels max (1/4 of original target)
-    // This reduces memory requirements from ~200KB to <50KB
-    int THUMB_TARGET_WIDTH = 120;
-    int THUMB_TARGET_HEIGHT = 180;
+    // Use smaller target size for Continue Reading card (half of screen: 240x400)
+    // Generate 1-bit BMP for fast home screen rendering (no gray passes needed)
+    int THUMB_TARGET_WIDTH = height * 0.6;
+    int THUMB_TARGET_HEIGHT = height;
     const bool success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(coverJpg, thumbBmp, THUMB_TARGET_WIDTH,
-                                                                              THUMB_TARGET_HEIGHT);
+                                                                             THUMB_TARGET_HEIGHT);
     coverJpg.close();
     thumbBmp.close();
     Storage.remove(coverJpgTempPath.c_str());
 
     if (!success) {
-      LOG_ERR("EBP", "Failed to generate thumb BMP from JPG cover image (mem error or unsupported)");
+      LOG_ERR("EBP", "Failed to generate thumb BMP from JPG cover image");
       Storage.remove(getThumbBmpPath(height).c_str());
-    } else {
-      LOG_INF("EBP", "Generated lightweight thumb BMP from JPG cover image");
     }
+    LOG_DBG("EBP", "Generated thumb BMP from JPG cover image, success: %s", success ? "yes" : "no");
     return success;
-  } else if (coverImageHref.substr(coverImageHref.length() - 4) == ".png") {
-    LOG_DBG("EBP", "Generating thumb BMP from PNG cover image (lightweight mode)");
+  } else if (thumbIsPng) {
+    LOG_DBG("EBP", "Generating thumb BMP from PNG cover image");
     const auto coverPngTempPath = getCachePath() + "/.cover.png";
 
     FsFile coverPng;
@@ -689,11 +698,8 @@ bool Epub::generateThumbBmp(int height) const {
       coverPng.close();
       return false;
     }
-    
-    // Use VERY small target size to avoid memory exhaustion
-    // 120x180 pixels max for PNG as well
-    int THUMB_TARGET_WIDTH = 120;
-    int THUMB_TARGET_HEIGHT = 180;
+    int THUMB_TARGET_WIDTH = height * 0.6;
+    int THUMB_TARGET_HEIGHT = height;
     const bool success =
         PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(coverPng, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT);
     coverPng.close();
@@ -701,11 +707,10 @@ bool Epub::generateThumbBmp(int height) const {
     Storage.remove(coverPngTempPath.c_str());
 
     if (!success) {
-      LOG_ERR("EBP", "Failed to generate thumb BMP from PNG cover image (mem error or unsupported)");
+      LOG_ERR("EBP", "Failed to generate thumb BMP from PNG cover image");
       Storage.remove(getThumbBmpPath(height).c_str());
-    } else {
-      LOG_INF("EBP", "Generated lightweight thumb BMP from PNG cover image");
     }
+    LOG_DBG("EBP", "Generated thumb BMP from PNG cover image, success: %s", success ? "yes" : "no");
     return success;
   } else {
     LOG_ERR("EBP", "Cover image is not a supported format, skipping thumbnail");
@@ -810,7 +815,7 @@ int Epub::getSpineIndexForTocIndex(const int tocIndex) const {
   const int spineIndex = bookMetadataCache->getTocEntry(tocIndex).spineIndex;
   if (spineIndex < 0) {
     LOG_DBG("EBP", "Section not found for TOC index %d", tocIndex);
-    return 0;
+    return -1;  // caller checks for -1; returning 0 was silently jumping to chapter 0
   }
 
   return spineIndex;
@@ -864,4 +869,31 @@ float Epub::calculateProgress(const int currentSpineIndex, const float currentSp
   const float sectionProgSize = currentSpineRead * static_cast<float>(curChapterSize);
   const float totalProgress = static_cast<float>(prevChapterSize) + sectionProgSize;
   return totalProgress / static_cast<float>(bookSize);
+}
+
+int Epub::resolveHrefToSpineIndex(const std::string& href) const {
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded()) return -1;
+
+  // Extract filename (remove #anchor)
+  std::string target = href;
+  size_t hashPos = target.find('#');
+  if (hashPos != std::string::npos) target = target.substr(0, hashPos);
+
+  // Same-file reference (anchor-only)
+  if (target.empty()) return -1;
+
+  // Extract just the filename for comparison
+  size_t targetSlash = target.find_last_of('/');
+  std::string targetFilename = (targetSlash != std::string::npos) ? target.substr(targetSlash + 1) : target;
+
+  for (int i = 0; i < getSpineItemsCount(); i++) {
+    const auto& spineHref = getSpineItem(i).href;
+    // Try exact match first
+    if (spineHref == target) return i;
+    // Then filename-only match
+    size_t spineSlash = spineHref.find_last_of('/');
+    std::string spineFilename = (spineSlash != std::string::npos) ? spineHref.substr(spineSlash + 1) : spineHref;
+    if (spineFilename == targetFilename) return i;
+  }
+  return -1;
 }

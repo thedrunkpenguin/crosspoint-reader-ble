@@ -13,6 +13,7 @@
 #include <I18n.h>
 
 #include "CrossPointSettings.h"
+#include "pet/PetManager.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
@@ -26,8 +27,7 @@ constexpr unsigned long goHomeMs = 1000;
 }  // namespace
 
 void XtcReaderActivity::onEnter() {
-  ActivityWithSubactivity::onEnter();
-
+  Activity::onEnter();
   if (!xtc) {
     return;
   }
@@ -47,7 +47,10 @@ void XtcReaderActivity::onEnter() {
 }
 
 void XtcReaderActivity::onExit() {
-  ActivityWithSubactivity::onExit();
+  Activity::onExit();
+
+  // Request half refresh for the next screen to clear accumulated reader ghosting
+  renderer.requestNextHalfRefresh();
 
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
@@ -55,33 +58,22 @@ void XtcReaderActivity::onExit() {
 }
 
 void XtcReaderActivity::loop() {
-  // Pass input responsibility to sub activity if exists
-  if (subActivity) {
-    subActivity->loop();
-    return;
-  }
-
   // Enter chapter selection activity
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (xtc && xtc->hasChapters() && !xtc->getChapters().empty()) {
-      exitActivity();
-      enterNewActivity(new XtcReaderChapterSelectionActivity(
-          this->renderer, this->mappedInput, xtc, currentPage,
-          [this] {
-            exitActivity();
-            requestUpdate();
-          },
-          [this](const uint32_t newPage) {
-            currentPage = newPage;
-            exitActivity();
-            requestUpdate();
-          }));
+      startActivityForResult(
+          std::make_unique<XtcReaderChapterSelectionActivity>(renderer, mappedInput, xtc, currentPage),
+          [this](const ActivityResult& result) {
+            if (!result.isCancelled) {
+              currentPage = std::get<PageResult>(result.data).page;
+            }
+          });
     }
   }
 
   // Long press BACK (1s+) goes to file selection
   if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= goHomeMs) {
-    onGoBack();
+    activityManager.goToFileBrowser(xtc ? xtc->getPath() : "");
     return;
   }
 
@@ -125,17 +117,19 @@ void XtcReaderActivity::loop() {
     } else {
       currentPage = 0;
     }
+    PET_MANAGER.onPageTurn();
     requestUpdate();
   } else if (nextTriggered) {
     currentPage += skipAmount;
     if (currentPage >= xtc->getPageCount()) {
       currentPage = xtc->getPageCount();  // Allow showing "End of book"
     }
+    PET_MANAGER.onPageTurn();
     requestUpdate();
   }
 }
 
-void XtcReaderActivity::render(Activity::RenderLock&&) {
+void XtcReaderActivity::render(RenderLock&&) {
   if (!xtc) {
     return;
   }

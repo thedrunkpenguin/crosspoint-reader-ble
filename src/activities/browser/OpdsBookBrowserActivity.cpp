@@ -1,3 +1,4 @@
+#include <BluetoothHIDManager.h>
 #include "OpdsBookBrowserActivity.h"
 
 #include <Epub.h>
@@ -11,6 +12,7 @@
 #include "MappedInputManager.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
+
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
 #include "util/StringUtils.h"
@@ -21,7 +23,10 @@ constexpr int PAGE_ITEMS = 23;
 }  // namespace
 
 void OpdsBookBrowserActivity::onEnter() {
-  ActivityWithSubactivity::onEnter();
+  Activity::onEnter();
+
+  // Suspend BLE before WiFi — shared 2.4GHz radio
+  BluetoothHIDManager::getInstance().disable();
 
   state = BrowserState::CHECK_WIFI;
   entries.clear();
@@ -37,10 +42,13 @@ void OpdsBookBrowserActivity::onEnter() {
 }
 
 void OpdsBookBrowserActivity::onExit() {
-  ActivityWithSubactivity::onExit();
+  Activity::onExit();
 
   // Turn off WiFi when exiting
   WiFi.mode(WIFI_OFF);
+
+  // Resume BLE now that WiFi is off
+  if (SETTINGS.bleEnabled) { BluetoothHIDManager::getInstance().enable(); }
 
   entries.clear();
   navigationHistory.clear();
@@ -49,7 +57,7 @@ void OpdsBookBrowserActivity::onExit() {
 void OpdsBookBrowserActivity::loop() {
   // Handle WiFi selection subactivity
   if (state == BrowserState::WIFI_SELECTION) {
-    ActivityWithSubactivity::loop();
+    // Should already handled by the WifiSelectionActivity
     return;
   }
 
@@ -136,7 +144,7 @@ void OpdsBookBrowserActivity::loop() {
   }
 }
 
-void OpdsBookBrowserActivity::render(Activity::RenderLock&&) {
+void OpdsBookBrowserActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
   const auto pageWidth = renderer.getScreenWidth();
@@ -171,7 +179,10 @@ void OpdsBookBrowserActivity::render(Activity::RenderLock&&) {
 
   if (state == BrowserState::DOWNLOADING) {
     renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 40, tr(STR_DOWNLOADING));
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 10, statusMessage.c_str());
+    const auto maxWidth = pageWidth - 40;
+    // Trim long titles to keep them within the screen bounds.
+    auto title = renderer.truncatedText(UI_10_FONT_ID, statusMessage.c_str(), maxWidth);
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 10, title.c_str());
     if (downloadTotal > 0) {
       const int barWidth = pageWidth - 100;
       constexpr int barHeight = 20;
@@ -279,7 +290,7 @@ void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
   statusMessage = tr(STR_LOADING);
   entries.clear();
   selectorIndex = 0;
-  requestUpdate();
+  requestUpdate(true);  // Force update to show loading state immediately before fetch
 
   fetchFeed(currentPath);
 }
@@ -308,7 +319,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   statusMessage = book.title;
   downloadProgress = 0;
   downloadTotal = 0;
-  requestUpdate();
+  requestUpdate(true);
 
   // Build full download URL
   std::string downloadUrl = UrlUtils::buildUrl(SETTINGS.opdsServerUrl, book.href);
@@ -326,7 +337,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
       HttpDownloader::downloadToFile(downloadUrl, filename, [this](const size_t downloaded, const size_t total) {
         downloadProgress = downloaded;
         downloadTotal = total;
-        requestUpdate();
+        requestUpdate(true);  // Force update to refresh progress bar
       });
 
   if (result == HttpDownloader::OK) {
@@ -364,18 +375,16 @@ void OpdsBookBrowserActivity::launchWifiSelection() {
   state = BrowserState::WIFI_SELECTION;
   requestUpdate();
 
-  enterNewActivity(new WifiSelectionActivity(renderer, mappedInput,
-                                             [this](const bool connected) { onWifiSelectionComplete(connected); }));
+  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
+                         [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
 }
 
 void OpdsBookBrowserActivity::onWifiSelectionComplete(const bool connected) {
-  exitActivity();
-
   if (connected) {
     LOG_DBG("OPDS", "WiFi connected via selection, fetching feed");
     state = BrowserState::LOADING;
     statusMessage = tr(STR_LOADING);
-    requestUpdate();
+    requestUpdate(true);  // Force update to show loading state immediately before fetch
     fetchFeed(currentPath);
   } else {
     LOG_DBG("OPDS", "WiFi selection cancelled/failed");

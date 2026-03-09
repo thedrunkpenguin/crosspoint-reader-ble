@@ -45,6 +45,13 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       currentTheme = std::make_unique<Lyra3CoversTheme>();
       currentMetrics = &Lyra3CoversMetrics::values;
       break;
+    case CrossPointSettings::UI_THEME::CROSSPET:
+    case CrossPointSettings::UI_THEME::CROSSPET_CLASSIC:
+      // Both CrossPet themes use Lyra visuals; home screen is custom HomeActivity
+      LOG_DBG("UI", "Using CrossPet theme");
+      currentTheme = std::make_unique<LyraTheme>();
+      currentMetrics = &LyraMetrics::values;
+      break;
   }
 }
 
@@ -89,4 +96,24 @@ UIIcon UITheme::getFileIcon(std::string filename) {
     return Image;
   }
   return File;
+}
+
+int UITheme::getStatusBarHeight() {
+  const ThemeMetrics& metrics = UITheme::getInstance().getMetrics();
+
+  // Add status bar margin
+  const bool showStatusBar = SETTINGS.statusBarChapterPageCount || SETTINGS.statusBarBookProgressPercentage ||
+                             SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE ||
+                             SETTINGS.statusBarBattery;
+  const bool showProgressBar =
+      SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
+  return (showStatusBar ? (metrics.statusBarVerticalMargin) : 0) +
+         (showProgressBar ? (((SETTINGS.statusBarProgressBarThickness + 1) * 2) + metrics.progressBarMarginTop) : 0);
+}
+
+int UITheme::getProgressBarHeight() {
+  const ThemeMetrics& metrics = UITheme::getInstance().getMetrics();
+  const bool showProgressBar =
+      SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
+  return (showProgressBar ? (((SETTINGS.statusBarProgressBarThickness + 1) * 2) + metrics.progressBarMarginTop) : 0);
 }
