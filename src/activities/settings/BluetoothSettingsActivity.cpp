@@ -147,7 +147,16 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
 void BluetoothSettingsActivity::handleDeviceListInput() {
   if (!btMgr) return;
 
-  const auto& devices = btMgr->getDiscoveredDevices();
+  // Create a sorted copy of devices
+  auto devices = btMgr->getDiscoveredDevices();
+  std::sort(devices.begin(), devices.end(),
+            [](const auto& a, const auto& b) { return a.rssi > b.rssi; });
+
+  // Truncate to the top 10 devices
+  if (devices.size() > 10) {
+    devices.resize(10);
+  }
+
   const auto& connectedDevices = btMgr->getConnectedDevices();
   
   // Calculate menu items: devices + "Refresh" + "Disconnect" (if connected)
@@ -320,8 +329,18 @@ void BluetoothSettingsActivity::renderDeviceList() {
     return;
   }
 
-  const auto& devices = btMgr->getDiscoveredDevices();
+  // Create a mutable copy to sort
+  auto devices = btMgr->getDiscoveredDevices();
   const auto& connectedDevices = btMgr->getConnectedDevices();
+
+  // Sort devices by RSSI (strongest first)
+  std::sort(devices.begin(), devices.end(),
+            [](const auto& a, const auto& b) { return a.rssi > b.rssi; });
+
+  // Truncate to the top 10 devices
+  if (devices.size() > 10) {
+    devices.resize(10);
+  }
 
   // Header with device count
   char countStr[32];
@@ -350,7 +369,6 @@ void BluetoothSettingsActivity::renderDeviceList() {
   std::vector<std::string> deviceLabels;
   std::vector<std::string> deviceValues;
   char buf[128];
-  int deviceCount = 0;
   
   if (!devices.empty()) {
     for (const auto& device : devices) {
@@ -366,20 +384,10 @@ void BluetoothSettingsActivity::renderDeviceList() {
       std::string signalBars = getSignalStrengthIndicator(device.rssi);
       snprintf(buf, sizeof(buf), "%s (%d dBm)", signalBars.c_str(), device.rssi);
       deviceValues.push_back(buf);
-      
-      deviceCount++;
-      
-      // Limit to reasonable number of devices to show
-      if (deviceCount >= 8) break;
     }
   }
   
   // Add action buttons
-  if (deviceCount < (int)devices.size()) {
-    deviceLabels.push_back("...");
-    deviceValues.push_back("");
-  }
-  
   deviceLabels.push_back("< Rescan >");
   deviceValues.push_back("");
   
