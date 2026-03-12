@@ -68,6 +68,15 @@ const DeviceProfile* findDeviceProfile(const char* macAddress, const char* devic
           return &KNOWN_DEVICES[1];  // Return MINI_KEYBOARD profile
         }
       }
+      
+      // Match Free 2 variants
+      if (strstr(deviceName, "Free") || strstr(deviceName, "free") ||
+          strstr(deviceName, "FREE")) {
+        if (strstr(deviceName, "2")) {
+          LOG_INF("DEV", "✓ Matched Free 2 by name pattern: %s", deviceName);
+          return &KNOWN_DEVICES[4]; // Return Free 2 profile
+        }
+      }
     }
     
     LOG_DBG("DEV", "No profile match for device name: %s", deviceName);

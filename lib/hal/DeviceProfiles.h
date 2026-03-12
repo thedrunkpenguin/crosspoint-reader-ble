@@ -40,6 +40,9 @@ constexpr DeviceProfile KNOWN_DEVICES[] = {
     
     // Generic Free2-style device pattern - standard HID Consumer Page
     {"Free2 Style", nullptr, STANDARD_PAGE_UP, STANDARD_PAGE_DOWN, true, 2},
+
+    // User provided profile for "Free 2" page turner
+    {"Free 2", "F3:AC:21", 0x28, 0x4C, false, 4},
 };
 
 constexpr int KNOWN_DEVICES_COUNT = sizeof(KNOWN_DEVICES) / sizeof(KNOWN_DEVICES[0]);

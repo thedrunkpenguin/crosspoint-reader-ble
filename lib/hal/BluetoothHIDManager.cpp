@@ -512,7 +512,9 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   
   // Extract keycode based on device profile or auto-detect
   uint8_t keycode = 0xFF;
-  bool isPressed = false;
+  //bool isPressed = false;
+  // Instead of checking if keycode != 0, check if the first byte is 0
+  bool isPressed = (pData[0] != 0);
   
   if (length < 2) {
     LOG_DBG("BT", "HID report too short (%d bytes)", length);
@@ -535,7 +537,8 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
     } else {
       // Standard HID keyboards: keycode presence indicates press
       // 0x00 = not pressed, any other value = pressed
-      isPressed = (keycode != 0x00);
+      // isPressed = (keycode != 0x00);
+      isPressed = (pData[0] != 0);
       LOG_DBG("BT", "Device %s: keycode=0x%02X, pressed=%d", device->profile->name, keycode, isPressed);
     }
   } else {
