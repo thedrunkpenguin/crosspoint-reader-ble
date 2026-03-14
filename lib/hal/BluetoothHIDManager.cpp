@@ -511,7 +511,8 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   device->lastActivityTime = millis();
   
   // Extract keycode based on device profile or auto-detect
-  uint8_t keycode = (length > profile.reportByteIndex) ? pData[profile.reportByteIndex] : pData[0];
+  
+  uint8_t keycode = 0xFF;
   bool isPressed = (keycode != 0) || (pData[0] != 0);
   
   if (length < 2) {
