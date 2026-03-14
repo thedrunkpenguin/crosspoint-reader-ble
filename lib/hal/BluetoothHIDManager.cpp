@@ -511,10 +511,8 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   device->lastActivityTime = millis();
   
   // Extract keycode based on device profile or auto-detect
-  uint8_t keycode = 0xFF;
-  //bool isPressed = false;
-  // Instead of checking if keycode != 0, check if the first byte is 0
-  bool isPressed = (pData[0] != 0);
+  uint8_t keycode = (length > profile.reportByteIndex) ? pData[profile.reportByteIndex] : pData[0];
+  bool isPressed = (keycode != 0) || (pData[0] != 0);
   
   if (length < 2) {
     LOG_DBG("BT", "HID report too short (%d bytes)", length);
