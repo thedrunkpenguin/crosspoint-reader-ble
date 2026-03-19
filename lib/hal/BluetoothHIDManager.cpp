@@ -458,6 +458,9 @@ bool BluetoothHIDManager::disconnectFromDevice(const std::string& address) {
     [&address](const ConnectedDevice& dev) { return dev.address == address; });
   
   if (it != _connectedDevices.end()) {
+    if (_buttonInjector && it->activeInjectedButton != 0xFF) {
+      _buttonInjector(it->activeInjectedButton, false);
+    }
     NimBLEClient* client = it->client;
 
     // Ensure normal CPU speed during BLE termination to avoid WDT in low-power mode.
@@ -520,7 +523,7 @@ void BluetoothHIDManager::setLearnInputCallback(std::function<void(uint8_t, uint
   LOG_DBG("BT", "Learn input callback registered");
 }
 
-void BluetoothHIDManager::setButtonInjector(std::function<void(uint8_t)> injector) {
+void BluetoothHIDManager::setButtonInjector(std::function<void(uint8_t, bool)> injector) {
   _buttonInjector = injector;
   LOG_DBG("BT", "Button injector registered");
 }
@@ -564,6 +567,13 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   
   // Update activity timestamp to keep connection alive
   device->lastActivityTime = millis();
+
+  auto releaseInjectedButton = [&]() {
+    if (g_instance->_buttonInjector && device->activeInjectedButton != 0xFF) {
+      g_instance->_buttonInjector(device->activeInjectedButton, false);
+    }
+    device->activeInjectedButton = 0xFF;
+  };
   
   // Extract keycode based on device profile or auto-detect
   uint8_t keycode = 0xFF;
@@ -643,6 +653,7 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   
   // Ignore if no valid keycode detected
   if (keycode == 0x00 || keycode == 0xFF) {
+    releaseInjectedButton();
     // Track state for transition detection
     device->lastButtonState = isPressed;
     device->lastHIDKeycode = keycode;
@@ -652,6 +663,7 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   // CRITICAL GATE: Don't inject any buttons until we've seen the first release
   // This prevents startup transient noise from being interpreted as button presses
   if (!device->hasSeenRelease) {
+    releaseInjectedButton();
     device->lastButtonState = isPressed;
     device->lastHIDKeycode = keycode;
     return;
@@ -667,26 +679,28 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
       g_instance->_learnInputCallback(keycode, keycodeIndex);
     }
     
-    // Try to map to button and inject with cooldown
-    if (g_instance->_buttonInjector) {
-      uint8_t btn = g_instance->mapKeycodeToButton(keycode, device->profile);
-      if (btn != 0xFF) {
-        // Add 150ms cooldown between button injections to prevent flooding
-        unsigned long now = millis();
-        if ((now - device->lastInjectionTime >= 150) || (keycode != device->lastInjectedKeycode)) {
-          String buttonName = (btn == HalGPIO::BTN_DOWN) ? "PageForward" : "PageBack";
-          LOG_INF("BT", "Mapped key 0x%02X -> %s", keycode, buttonName.c_str());
-          LOG_DBG("BT", "Injecting button: %d", btn);
-          g_instance->_buttonInjector(btn);
-          device->lastInjectionTime = now;
-          device->lastInjectedKeycode = keycode;
-        }
-      }
-    }
-    
     // Also call original callback if set
     if (g_instance->_inputCallback) {
       g_instance->_inputCallback(keycode);
+    }
+  }
+
+  const uint8_t mappedButton = isPressed ? g_instance->mapKeycodeToButton(keycode, device->profile) : 0xFF;
+
+  if (!isPressed || mappedButton == 0xFF) {
+    releaseInjectedButton();
+  } else {
+    if (device->activeInjectedButton != 0xFF && device->activeInjectedButton != mappedButton) {
+      releaseInjectedButton();
+    }
+
+    if (g_instance->_buttonInjector && device->activeInjectedButton == 0xFF) {
+      String buttonName = (mappedButton == HalGPIO::BTN_DOWN) ? "PageForward" : "PageBack";
+      LOG_INF("BT", "Mapped key 0x%02X -> %s", keycode, buttonName.c_str());
+      g_instance->_buttonInjector(mappedButton, true);
+      device->activeInjectedButton = mappedButton;
+      device->lastInjectionTime = millis();
+      device->lastInjectedKeycode = keycode;
     }
   }
   
@@ -726,18 +740,6 @@ uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, const DevicePro
   if (keycode != 0x00) {
     LOG_DBG("BT", "mapKeycodeToButton() called with keycode: 0x%02X", keycode);
   }
-
-  // Always honor learned keys first so users can override defaults for any remote.
-  if (const auto* customProfile = DeviceProfiles::getCustomProfile()) {
-    if (keycode == customProfile->pageUpCode) {
-      LOG_INF("BT", "Mapped learned key 0x%02X -> PageBack", keycode);
-      return HalGPIO::BTN_UP;
-    }
-    if (keycode == customProfile->pageDownCode) {
-      LOG_INF("BT", "Mapped learned key 0x%02X -> PageForward", keycode);
-      return HalGPIO::BTN_DOWN;
-    }
-  }
   
   // If we have a device profile, ONLY map keycodes specific to that profile
   if (profile) {
@@ -752,6 +754,18 @@ uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, const DevicePro
       LOG_DBG("BT", "Keycode 0x%02X not in profile %s (expecting 0x%02X/0x%02X), ignoring", 
               keycode, profile->name, profile->pageUpCode, profile->pageDownCode);
       return 0xFF;
+    }
+  }
+
+  // Learned mappings are only used for unknown devices.
+  if (const auto* customProfile = DeviceProfiles::getCustomProfile()) {
+    if (keycode == customProfile->pageUpCode) {
+      LOG_INF("BT", "Mapped learned key 0x%02X -> PageBack", keycode);
+      return HalGPIO::BTN_UP;
+    }
+    if (keycode == customProfile->pageDownCode) {
+      LOG_INF("BT", "Mapped learned key 0x%02X -> PageForward", keycode);
+      return HalGPIO::BTN_DOWN;
     }
   }
 
@@ -823,6 +837,9 @@ void BluetoothHIDManager::checkAutoReconnect(bool userInputDetected) {
   // Remove stale disconnected clients from active list.
   for (auto it = _connectedDevices.begin(); it != _connectedDevices.end();) {
     if (!it->client || !it->client->isConnected()) {
+      if (_buttonInjector && it->activeInjectedButton != 0xFF) {
+        _buttonInjector(it->activeInjectedButton, false);
+      }
       LOG_DBG("BT", "Pruning stale disconnected client entry: %s client=%p", it->address.c_str(), it->client);
       it = _connectedDevices.erase(it);
     } else {

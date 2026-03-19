@@ -81,13 +81,14 @@ void XtcReaderActivity::loop() {
   }
 
   // Long press BACK (1s+) goes to file selection
-  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= goHomeMs) {
+  const unsigned long backHeldMs = mappedInput.getHeldTime(MappedInputManager::Button::Back);
+  if (mappedInput.isPressed(MappedInputManager::Button::Back) && backHeldMs >= goHomeMs) {
     onGoBack();
     return;
   }
 
   // Short press BACK goes directly to home
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && mappedInput.getHeldTime() < goHomeMs) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && backHeldMs < goHomeMs) {
     onGoHome();
     return;
   }
@@ -110,6 +111,11 @@ void XtcReaderActivity::loop() {
     return;
   }
 
+  const unsigned long prevHeldMs = std::max(mappedInput.getHeldTime(MappedInputManager::Button::PageBack),
+                                            mappedInput.getHeldTime(MappedInputManager::Button::Left));
+  const unsigned long nextHeldMs = std::max(mappedInput.getHeldTime(MappedInputManager::Button::PageForward),
+                                            mappedInput.getHeldTime(MappedInputManager::Button::Right));
+
   // Handle end of book
   if (currentPage >= xtc->getPageCount()) {
     currentPage = xtc->getPageCount() - 1;
@@ -117,7 +123,7 @@ void XtcReaderActivity::loop() {
     return;
   }
 
-  const bool skipPages = SETTINGS.longPressChapterSkip && mappedInput.getHeldTime() > skipPageMs;
+  const bool skipPages = SETTINGS.longPressChapterSkip && ((prevTriggered ? prevHeldMs : nextHeldMs) > skipPageMs);
   const int skipAmount = skipPages ? 10 : 1;
 
   if (prevTriggered) {

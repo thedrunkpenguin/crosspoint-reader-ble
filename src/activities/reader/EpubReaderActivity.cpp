@@ -186,13 +186,14 @@ void EpubReaderActivity::loop() {
   }
 
   // Long press BACK (1s+) goes to file selection
-  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= goHomeMs) {
+  const unsigned long backHeldMs = mappedInput.getHeldTime(MappedInputManager::Button::Back);
+  if (mappedInput.isPressed(MappedInputManager::Button::Back) && backHeldMs >= goHomeMs) {
     onGoBack();
     return;
   }
 
   // Short press BACK goes directly to home
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && mappedInput.getHeldTime() < goHomeMs) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && backHeldMs < goHomeMs) {
     onGoHome();
     return;
   }
@@ -215,6 +216,11 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  const unsigned long prevHeldMs = std::max(mappedInput.getHeldTime(MappedInputManager::Button::PageBack),
+                                            mappedInput.getHeldTime(MappedInputManager::Button::Left));
+  const unsigned long nextHeldMs = std::max(mappedInput.getHeldTime(MappedInputManager::Button::PageForward),
+                                            mappedInput.getHeldTime(MappedInputManager::Button::Right));
+
   // any botton press when at end of the book goes back to the last page
   if (currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
     currentSpineIndex = epub->getSpineItemsCount() - 1;
@@ -223,7 +229,7 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  const bool skipChapter = SETTINGS.longPressChapterSkip && mappedInput.getHeldTime() > skipChapterMs;
+  const bool skipChapter = SETTINGS.longPressChapterSkip && ((prevTriggered ? prevHeldMs : nextHeldMs) > skipChapterMs);
 
   if (skipChapter) {
     // We don't want to delete the section mid-render, so grab the semaphore

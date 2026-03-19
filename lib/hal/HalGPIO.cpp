@@ -8,53 +8,91 @@ void HalGPIO::begin() {
 }
 
 void HalGPIO::update() { 
-  // Save previous virtual button state BEFORE updating current state
-  // This allows wasReleased() to detect buttons that were pressed last frame but not this frame
-  previousVirtualButtonEvents = virtualButtonEvents;
-  
-  // Move queued virtual buttons to current events for this frame
-  // Then clear the queue so only buttons pressed this frame show in events
-  virtualButtonEvents = virtualButtonQueue;
-  virtualButtonQueue = 0;
-  
+  previousVirtualButtonState = virtualButtonState;
+  virtualButtonState = desiredVirtualButtonState;
+
   inputMgr.update();
 }
 
-bool HalGPIO::isPressed(uint8_t buttonIndex) const { return inputMgr.isPressed(buttonIndex); }
+bool HalGPIO::isPressed(uint8_t buttonIndex) const {
+  return inputMgr.isPressed(buttonIndex) || (virtualButtonState & (1 << buttonIndex));
+}
 
 bool HalGPIO::wasPressed(uint8_t buttonIndex) const { 
-  return inputMgr.wasPressed(buttonIndex) || (virtualButtonEvents & (1 << buttonIndex));
+  const uint8_t virtualPressed = virtualButtonState & ~previousVirtualButtonState;
+  return inputMgr.wasPressed(buttonIndex) || (virtualPressed & (1 << buttonIndex));
 }
 
 bool HalGPIO::wasAnyPressed() const { 
-  return inputMgr.wasAnyPressed() || (virtualButtonEvents > 0);
+  const uint8_t virtualPressed = virtualButtonState & ~previousVirtualButtonState;
+  return inputMgr.wasAnyPressed() || (virtualPressed > 0);
 }
 
 bool HalGPIO::wasReleased(uint8_t buttonIndex) const { 
-  // Check both physical button releases AND virtual button releases
-  // Virtual release = was pressed last frame but not this frame
-  const uint8_t virtualRelease = previousVirtualButtonEvents & ~virtualButtonEvents;
+  const uint8_t virtualRelease = previousVirtualButtonState & ~virtualButtonState;
   return inputMgr.wasReleased(buttonIndex) || (virtualRelease & (1 << buttonIndex));
 }
 
 bool HalGPIO::wasAnyReleased() const { 
-  // Check both physical and virtual button releases
-  const uint8_t virtualRelease = previousVirtualButtonEvents & ~virtualButtonEvents;
+  const uint8_t virtualRelease = previousVirtualButtonState & ~virtualButtonState;
   return inputMgr.wasAnyReleased() || (virtualRelease > 0);
 }
 
-unsigned long HalGPIO::getHeldTime() const { return inputMgr.getHeldTime(); }
+unsigned long HalGPIO::getHeldTime() const {
+  unsigned long heldTime = inputMgr.getHeldTime();
+
+  for (uint8_t buttonIndex = 0; buttonIndex <= BTN_POWER; ++buttonIndex) {
+    const unsigned long virtualHeldTime = getHeldTime(buttonIndex);
+    if (virtualHeldTime > heldTime) {
+      heldTime = virtualHeldTime;
+    }
+  }
+
+  return heldTime;
+}
+
+unsigned long HalGPIO::getHeldTime(uint8_t buttonIndex) const {
+  const uint8_t mask = (1 << buttonIndex);
+  if (virtualButtonState & mask) {
+    return millis() - virtualPressStart[buttonIndex];
+  }
+
+  if ((previousVirtualButtonState & ~virtualButtonState) & mask) {
+    return virtualPressFinish[buttonIndex] - virtualPressStart[buttonIndex];
+  }
+
+  if (inputMgr.isPressed(buttonIndex) || inputMgr.wasPressed(buttonIndex) || inputMgr.wasReleased(buttonIndex)) {
+    return inputMgr.getHeldTime();
+  }
+
+  return 0;
+}
+
+void HalGPIO::setVirtualButtonState(uint8_t buttonIndex, bool pressed) {
+  const uint8_t mask = (1 << buttonIndex);
+  const bool wasPressed = (desiredVirtualButtonState & mask) != 0;
+  if (pressed == wasPressed) {
+    return;
+  }
+
+  if (pressed) {
+    desiredVirtualButtonState |= mask;
+    virtualPressStart[buttonIndex] = millis();
+  } else {
+    desiredVirtualButtonState &= ~mask;
+    virtualPressFinish[buttonIndex] = millis();
+  }
+}
 
 void HalGPIO::injectButtonPress(uint8_t buttonIndex) {
-  // Queue the button for the next update() call
-  // This ensures the reader gets a chance to check wasPressed() 
-  // before the button is cleared
-  virtualButtonQueue |= (1 << buttonIndex);
+  setVirtualButtonState(buttonIndex, true);
+  setVirtualButtonState(buttonIndex, false);
 }
 
 void HalGPIO::clearVirtualButtons() {
-  virtualButtonEvents = 0;
-  virtualButtonQueue = 0;
+  virtualButtonState = 0;
+  desiredVirtualButtonState = 0;
+  previousVirtualButtonState = 0;
 }
 
 bool HalGPIO::isUsbConnected() const {

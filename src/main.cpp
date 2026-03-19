@@ -373,8 +373,8 @@ void setup() {
   // Initialize Bluetooth HID button injection
   try {
     auto& btMgr = BluetoothHIDManager::getInstance();
-    btMgr.setButtonInjector([](uint8_t buttonIndex) {
-      gpio.injectButtonPress(buttonIndex);
+    btMgr.setButtonInjector([](uint8_t buttonIndex, bool pressed) {
+      gpio.setVirtualButtonState(buttonIndex, pressed);
     });
     btMgr.setBondedDevice(SETTINGS.bleBondedDeviceAddr, SETTINGS.bleBondedDeviceName);
     LOG_INF("MAIN", "Bluetooth HID initialized with button injection");

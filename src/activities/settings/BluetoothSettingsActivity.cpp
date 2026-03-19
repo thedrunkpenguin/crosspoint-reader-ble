@@ -45,19 +45,6 @@ void BluetoothSettingsActivity::onEnter() {
       lastError = "Bluetooth disabled per settings";
     }
 
-    btMgr->setLearnInputCallback([this](uint8_t keycode, uint8_t reportIndex) {
-      if (keycode > 0 && reportIndex != 0xFF) {
-        pendingLearnKey = keycode;
-        pendingLearnIndex = reportIndex;
-      }
-    });
-
-    // Keep legacy callback enabled for any non-learn consumers.
-    btMgr->setInputCallback([this](uint16_t keycode) {
-      if (pendingLearnKey == 0 && keycode > 0 && keycode <= 0xFF) {
-        pendingLearnKey = static_cast<uint8_t>(keycode);
-      }
-    });
   } catch (const std::exception& e) {
     LOG_ERR("BT", "Failed to get BLE manager: %s", e.what());
     lastError = "BLE manager error";
@@ -74,7 +61,6 @@ void BluetoothSettingsActivity::onEnter() {
 void BluetoothSettingsActivity::onExit() {
   if (btMgr) {
     btMgr->setLearnInputCallback(nullptr);
-    btMgr->setInputCallback(nullptr);
   }
   Activity::onExit();
 }
@@ -91,6 +77,9 @@ void BluetoothSettingsActivity::loop() {
       requestUpdate();
       return;
     } else if (viewMode == ViewMode::LEARN_KEYS) {
+      if (btMgr) {
+        btMgr->setLearnInputCallback(nullptr);
+      }
       viewMode = ViewMode::MAIN_MENU;
       selectedIndex = 0;
       lastError = "Learn mode canceled";
@@ -212,6 +201,12 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
         learnedPrevKey = 0;
         learnedNextKey = 0;
         learnedReportIndex = 2;
+        btMgr->setLearnInputCallback([this](uint8_t keycode, uint8_t reportIndex) {
+          if (viewMode == ViewMode::LEARN_KEYS && keycode > 0 && reportIndex != 0xFF) {
+            pendingLearnKey = keycode;
+            pendingLearnIndex = reportIndex;
+          }
+        });
         lastError = "Press PREVIOUS PAGE button";
       }
       requestUpdate();
@@ -267,6 +262,9 @@ void BluetoothSettingsActivity::handleLearnInput() {
 
       learnedNextKey = capturedKey;
       DeviceProfiles::setCustomProfile(learnedPrevKey, learnedNextKey, learnedReportIndex);
+      if (btMgr) {
+        btMgr->setLearnInputCallback(nullptr);
+      }
       learnStep = LearnStep::DONE;
       char buf[96];
       snprintf(buf, sizeof(buf), "Saved Prev=0x%02X Next=0x%02X @byte[%u]", learnedPrevKey, learnedNextKey,
@@ -278,6 +276,9 @@ void BluetoothSettingsActivity::handleLearnInput() {
   }
 
   if (learnStep == LearnStep::DONE && mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    if (btMgr) {
+      btMgr->setLearnInputCallback(nullptr);
+    }
     viewMode = ViewMode::MAIN_MENU;
     selectedIndex = 0;
     requestUpdate();

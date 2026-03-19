@@ -22,9 +22,11 @@ class HalGPIO {
 #if CROSSPOINT_EMULATED == 0
   InputManager inputMgr;
 #endif
-  uint8_t virtualButtonEvents = 0;   // Current frame virtual button events
-  uint8_t virtualButtonQueue = 0;    // Persistent queue for virtual buttons
-  uint8_t previousVirtualButtonEvents = 0;  // Track previous frame for release detection
+  uint8_t virtualButtonState = 0;         // Current virtual button state
+  uint8_t desiredVirtualButtonState = 0;  // State requested by async injectors
+  uint8_t previousVirtualButtonState = 0; // Previous frame virtual state
+  unsigned long virtualPressStart[7] = {0};
+  unsigned long virtualPressFinish[7] = {0};
 
  public:
   HalGPIO() = default;
@@ -40,8 +42,10 @@ class HalGPIO {
   bool wasReleased(uint8_t buttonIndex) const;
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;
+  unsigned long getHeldTime(uint8_t buttonIndex) const;
 
   // Virtual button injection (for Bluetooth HID)
+  void setVirtualButtonState(uint8_t buttonIndex, bool pressed);
   void injectButtonPress(uint8_t buttonIndex);
   void clearVirtualButtons();
 

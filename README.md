@@ -9,6 +9,16 @@ fully-featured, open-source replacement firmware with additional quality-of-life
 
 ![](./docs/images/cover.jpg)
 
+## Release Highlights
+
+### v1.1.1.1-ble (latest)
+
+- Fixes a BLE input bug where long-press usage could unintentionally update learned key mappings.
+- Learned BLE mappings are now only captured in **Settings → Bluetooth → Learn Page-Turn Keys**.
+- Known remote profiles (GameBrick, Mini_Keyboard) are no longer overridden by learned mappings.
+- Adds proper Bluetooth long-press behavior for chapter skip, matching side-button long-press behavior.
+- Keeps side keys working consistently whether a Bluetooth remote is connected or not.
+
 ## What's different in this fork
 
 | Feature | Original CrossPoint | This fork |
