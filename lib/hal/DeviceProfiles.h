@@ -16,6 +16,18 @@ namespace DeviceProfiles {
 constexpr uint8_t STANDARD_PAGE_UP = 0xE9;      // Consumer Page: Page Up
 constexpr uint8_t STANDARD_PAGE_DOWN = 0xEA;    // Consumer Page: Page Down
 
+// Common keyboard/navigation page-turn keycodes seen on BLE clickers/remotes
+constexpr uint8_t KEYBOARD_PAGE_UP = 0x4B;
+constexpr uint8_t KEYBOARD_PAGE_DOWN = 0x4E;
+constexpr uint8_t KEYBOARD_UP_ARROW = 0x52;
+constexpr uint8_t KEYBOARD_DOWN_ARROW = 0x51;
+constexpr uint8_t KEYBOARD_LEFT_ARROW = 0x50;
+constexpr uint8_t KEYBOARD_RIGHT_ARROW = 0x4F;
+constexpr uint8_t KEYBOARD_SPACE = 0x2C;
+constexpr uint8_t KEYBOARD_ENTER = 0x28;
+constexpr uint8_t KEYBOARD_VOLUME_UP = 0x80;
+constexpr uint8_t KEYBOARD_VOLUME_DOWN = 0x81;
+
 struct DeviceProfile {
   const char* name;           // Device name for display
   const char* macPrefix;      // MAC address prefix to identify device (or nullptr)
@@ -55,6 +67,19 @@ const DeviceProfile* findDeviceProfile(const char* macAddress, const char* devic
  * (0xE9 = Page Up, 0xEA = Page Down)
  */
 bool isStandardConsumerPageCode(uint8_t code);
+
+/**
+ * Check if a keycode is a commonly used page-turn keycode across
+ * generic BLE clickers/remotes in keyboard or consumer report modes.
+ */
+bool isCommonPageTurnCode(uint8_t code);
+
+/**
+ * Convert a keycode to page-turn direction for generic devices.
+ * Returns true if mapped; false if the keycode should be ignored.
+ * Sets pageForward=true for next-page, false for previous-page.
+ */
+bool mapCommonCodeToDirection(uint8_t code, bool& pageForward);
 
 /**
  * Get a user-configured device profile from settings

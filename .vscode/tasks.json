@@ -1,0 +1,14 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build Firmware",
+			"type": "shell",
+			"command": "platformio",
+			"args": [
+				"run"
+			],
+			"isBackground": false
+		}
+	]
+}

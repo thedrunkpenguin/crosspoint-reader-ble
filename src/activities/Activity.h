@@ -20,20 +20,29 @@ class Activity {
 
   // Task to render and display the activity
   TaskHandle_t renderTaskHandle = nullptr;
-  [[noreturn]] static void renderTaskTrampoline(void* param);
+  volatile bool renderTaskExitRequested = false;
+  static void renderTaskTrampoline(void* param);
   [[noreturn]] virtual void renderTaskLoop();
 
   // Mutex to protect rendering operations from being deleted mid-render
   SemaphoreHandle_t renderingMutex = nullptr;
+  SemaphoreHandle_t renderTaskExitSignal = nullptr;
 
  public:
   explicit Activity(std::string name, GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : name(std::move(name)), renderer(renderer), mappedInput(mappedInput), renderingMutex(xSemaphoreCreateMutex()) {
+      : name(std::move(name)),
+        renderer(renderer),
+        mappedInput(mappedInput),
+        renderingMutex(xSemaphoreCreateMutex()),
+        renderTaskExitSignal(xSemaphoreCreateBinary()) {
     assert(renderingMutex != nullptr && "Failed to create rendering mutex");
+    assert(renderTaskExitSignal != nullptr && "Failed to create render task exit signal");
   }
   virtual ~Activity() {
     vSemaphoreDelete(renderingMutex);
     renderingMutex = nullptr;
+    vSemaphoreDelete(renderTaskExitSignal);
+    renderTaskExitSignal = nullptr;
   };
   class RenderLock;
   virtual void onEnter();

@@ -595,16 +595,31 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
   bool isScaled = false;
   int cropPixX = std::floor(bitmap.getWidth() * cropX / 2.0f);
   int cropPixY = std::floor(bitmap.getHeight() * cropY / 2.0f);
+  const float croppedWidth = (1.0f - cropX) * static_cast<float>(bitmap.getWidth());
+  const float croppedHeight = (1.0f - cropY) * static_cast<float>(bitmap.getHeight());
   LOG_DBG("GFX", "Cropping %dx%d by %dx%d pix, is %s", bitmap.getWidth(), bitmap.getHeight(), cropPixX, cropPixY,
           bitmap.isTopDown() ? "top-down" : "bottom-up");
 
-  if (maxWidth > 0 && (1.0f - cropX) * bitmap.getWidth() > maxWidth) {
-    scale = static_cast<float>(maxWidth) / static_cast<float>((1.0f - cropX) * bitmap.getWidth());
-    isScaled = true;
-  }
-  if (maxHeight > 0 && (1.0f - cropY) * bitmap.getHeight() > maxHeight) {
-    scale = std::min(scale, static_cast<float>(maxHeight) / static_cast<float>((1.0f - cropY) * bitmap.getHeight()));
-    isScaled = true;
+  if (maxWidth > 0 || maxHeight > 0) {
+    float widthScale = 0.0f;
+    float heightScale = 0.0f;
+    if (maxWidth > 0 && croppedWidth > 0.0f) {
+      widthScale = static_cast<float>(maxWidth) / croppedWidth;
+    }
+    if (maxHeight > 0 && croppedHeight > 0.0f) {
+      heightScale = static_cast<float>(maxHeight) / croppedHeight;
+    }
+
+    if (widthScale > 0.0f && heightScale > 0.0f) {
+      scale = std::min(widthScale, heightScale);
+      isScaled = true;
+    } else if (widthScale > 0.0f) {
+      scale = widthScale;
+      isScaled = true;
+    } else if (heightScale > 0.0f) {
+      scale = heightScale;
+      isScaled = true;
+    }
   }
   LOG_DBG("GFX", "Scaling by %f - %s", scale, isScaled ? "scaled" : "not scaled");
 
@@ -682,13 +697,26 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
                                  const int maxHeight) const {
   float scale = 1.0f;
   bool isScaled = false;
-  if (maxWidth > 0 && bitmap.getWidth() > maxWidth) {
-    scale = static_cast<float>(maxWidth) / static_cast<float>(bitmap.getWidth());
-    isScaled = true;
-  }
-  if (maxHeight > 0 && bitmap.getHeight() > maxHeight) {
-    scale = std::min(scale, static_cast<float>(maxHeight) / static_cast<float>(bitmap.getHeight()));
-    isScaled = true;
+  if (maxWidth > 0 || maxHeight > 0) {
+    float widthScale = 0.0f;
+    float heightScale = 0.0f;
+    if (maxWidth > 0 && bitmap.getWidth() > 0) {
+      widthScale = static_cast<float>(maxWidth) / static_cast<float>(bitmap.getWidth());
+    }
+    if (maxHeight > 0 && bitmap.getHeight() > 0) {
+      heightScale = static_cast<float>(maxHeight) / static_cast<float>(bitmap.getHeight());
+    }
+
+    if (widthScale > 0.0f && heightScale > 0.0f) {
+      scale = std::min(widthScale, heightScale);
+      isScaled = true;
+    } else if (widthScale > 0.0f) {
+      scale = widthScale;
+      isScaled = true;
+    } else if (heightScale > 0.0f) {
+      scale = heightScale;
+      isScaled = true;
+    }
   }
 
   // For 1-bit BMP, output is still 2-bit packed (for consistency with readNextRow)

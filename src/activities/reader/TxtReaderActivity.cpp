@@ -12,6 +12,7 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "pet/PetManager.h"
 
 namespace {
 constexpr unsigned long goHomeMs = 1000;
@@ -113,9 +114,11 @@ void TxtReaderActivity::loop() {
 
   if (prevTriggered && currentPage > 0) {
     currentPage--;
+    PET_MANAGER.onPageTurn();
     requestUpdate();
   } else if (nextTriggered && currentPage < totalPages - 1) {
     currentPage++;
+    PET_MANAGER.onPageTurn();
     requestUpdate();
   }
 }

@@ -33,6 +33,10 @@ void SettingsActivity::onEnter() {
 
   for (auto& setting : getSettingsList()) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
+    if (setting.category == StrId::STR_CAT_SYSTEM && setting.type == SettingType::TOGGLE &&
+        setting.nameId == StrId::STR_BLUETOOTH) {
+      continue;
+    }
     if (setting.category == StrId::STR_CAT_DISPLAY) {
       displaySettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_READER) {

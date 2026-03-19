@@ -330,15 +330,14 @@ bool Xtc::generateThumbBmp(int height) const {
     return false;
   }
 
-  // Use VERY small target dimensions to avoid memory exhaustion
-  // 120x180 pixels for lightweight thumbnail generation
-  int THUMB_TARGET_WIDTH = 120;
-  int THUMB_TARGET_HEIGHT = 180;
+  // Use requested height (capped) for better quality while keeping memory bounded.
+  const int thumbTargetHeight = std::max(180, std::min(height, 320));
+  const int thumbTargetWidth = std::max(120, (thumbTargetHeight * 2) / 3);
 
   // Calculate scale factor
-  float scaleX = static_cast<float>(THUMB_TARGET_WIDTH) / pageInfo.width;
-  float scaleY = static_cast<float>(THUMB_TARGET_HEIGHT) / pageInfo.height;
-  float scale = (scaleX > scaleY) ? scaleX : scaleY;  // for cropping
+  float scaleX = static_cast<float>(thumbTargetWidth) / pageInfo.width;
+  float scaleY = static_cast<float>(thumbTargetHeight) / pageInfo.height;
+  float scale = (scaleX < scaleY) ? scaleX : scaleY;  // fit inside target
 
   // Only scale down, never up
   if (scale >= 1.0f) {
@@ -359,7 +358,7 @@ bool Xtc::generateThumbBmp(int height) const {
   if (thumbWidth < 1) thumbWidth = 1;
   if (thumbHeight < 1) thumbHeight = 1;
 
-  LOG_DBG("XTC", "Generating lightweight thumb BMP: %dx%d -> %dx%d (scale: %.3f)", pageInfo.width, pageInfo.height,
+  LOG_DBG("XTC", "Generating thumb BMP: %dx%d -> %dx%d (scale: %.3f)", pageInfo.width, pageInfo.height,
           thumbWidth, thumbHeight, scale);
 
   // Allocate buffer for page data
@@ -436,7 +435,67 @@ bool Xtc::generateThumbBmp(int height) const {
   };
   thumbBmp.write(palette, 8);
 
-  LOG_INF("XTC", "Generated lightweight thumb BMP (1-bit %dx%d)", thumbWidth, thumbHeight);
+  // Write bitmap rows (top-down).
+  const size_t dstRowSize = (thumbWidth + 7) / 8;
+  uint8_t* rowBuffer = static_cast<uint8_t*>(malloc(dstRowSize));
+  if (!rowBuffer) {
+    LOG_ERR("XTC", "Failed to allocate thumbnail row buffer (%u bytes)", dstRowSize);
+    free(pageBuffer);
+    thumbBmp.close();
+    Storage.remove(getThumbBmpPath(height).c_str());
+    return false;
+  }
+
+  const size_t srcRowBytes = (pageInfo.width + 7) / 8;
+  const size_t planeSize = ((static_cast<size_t>(pageInfo.width) * pageInfo.height + 7) / 8);
+  const uint8_t* plane1 = pageBuffer;
+  const uint8_t* plane2 = (bitDepth == 2) ? (pageBuffer + planeSize) : nullptr;
+  const size_t colBytes = (bitDepth == 2) ? ((pageInfo.height + 7) / 8) : 0;
+
+  for (uint16_t y = 0; y < thumbHeight; y++) {
+    memset(rowBuffer, 0xFF, dstRowSize);  // start white
+    const uint16_t srcY = std::min<uint16_t>(pageInfo.height - 1,
+                                             static_cast<uint16_t>((static_cast<uint32_t>(y) * pageInfo.height) / thumbHeight));
+
+    for (uint16_t x = 0; x < thumbWidth; x++) {
+      const uint16_t srcX = std::min<uint16_t>(pageInfo.width - 1,
+                                               static_cast<uint16_t>((static_cast<uint32_t>(x) * pageInfo.width) / thumbWidth));
+
+      bool isBlack = false;
+      if (bitDepth == 2) {
+        const size_t colIndex = pageInfo.width - 1 - srcX;
+        const size_t byteInCol = srcY / 8;
+        const size_t bitInByte = 7 - (srcY % 8);
+        const size_t byteOffset = colIndex * colBytes + byteInCol;
+        const uint8_t b1 = (plane1[byteOffset] >> bitInByte) & 1;
+        const uint8_t b2 = (plane2[byteOffset] >> bitInByte) & 1;
+        const uint8_t pixelValue = (b1 << 1) | b2;
+        isBlack = pixelValue >= 1;
+      } else {
+        const size_t srcByte = static_cast<size_t>(srcY) * srcRowBytes + srcX / 8;
+        const size_t srcBit = 7 - (srcX % 8);
+        isBlack = (((pageBuffer[srcByte] >> srcBit) & 1) == 0);  // XTC polarity: 0 black, 1 white
+      }
+
+      if (isBlack) {
+        const size_t dstByte = x / 8;
+        const size_t dstBit = 7 - (x % 8);
+        rowBuffer[dstByte] &= ~(1 << dstBit);
+      }
+    }
+
+    thumbBmp.write(rowBuffer, dstRowSize);
+
+    uint8_t padding[4] = {0, 0, 0, 0};
+    size_t paddingSize = rowSize - dstRowSize;
+    if (paddingSize > 0) {
+      thumbBmp.write(padding, paddingSize);
+    }
+  }
+
+  free(rowBuffer);
+
+  LOG_INF("XTC", "Generated thumb BMP (1-bit %dx%d)", thumbWidth, thumbHeight);
   free(pageBuffer);
   thumbBmp.close();
   return true;
@@ -468,6 +527,13 @@ uint8_t Xtc::getBitDepth() const {
     return 1;  // Default to 1-bit
   }
   return parser->getBitDepth();
+}
+
+bool Xtc::getPageInfo(uint32_t pageIndex, xtc::PageInfo& info) const {
+  if (!loaded || !parser) {
+    return false;
+  }
+  return parser->getPageInfo(pageIndex, info);
 }
 
 size_t Xtc::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSize) const {

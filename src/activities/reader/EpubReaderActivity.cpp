@@ -18,6 +18,7 @@
 #include "activities/settings/BluetoothSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "pet/PetManager.h"
 
 namespace {
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
@@ -114,6 +115,9 @@ void EpubReaderActivity::onExit() {
 
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
+  lastTrackedSpineIndex = -1;
+  lastTrackedPageIndex = -1;
+  bookFinishedReported = false;
   section.reset();
   epub.reset();
 }
@@ -415,7 +419,8 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           [this]() {
             // Return to the reader after Bluetooth settings
             pendingSubactivityExit = true;
-          }));
+          },
+          true));
       break;
     }
     case EpubReaderMenuActivity::MenuAction::DELETE_CACHE: {
@@ -512,6 +517,10 @@ void EpubReaderActivity::render(Activity::RenderLock&& lock) {
 
   // Show end of book screen
   if (currentSpineIndex == epub->getSpineItemsCount()) {
+    if (!bookFinishedReported) {
+      PET_MANAGER.onBookFinished();
+      bookFinishedReported = true;
+    }
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_END_OF_BOOK), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
@@ -626,22 +635,42 @@ void EpubReaderActivity::render(Activity::RenderLock&& lock) {
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
     renderer.clearFontCache();
   }
-  saveProgress(currentSpineIndex, section->currentPage, section->pageCount);
+  {
+    int bookPercent = 0;
+    if (epub->getBookSize() > 0 && section->pageCount > 0) {
+      const float chapterProgress =
+          static_cast<float>(section->currentPage) / static_cast<float>(section->pageCount);
+      bookPercent = clampPercent(
+          static_cast<int>(epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f + 0.5f));
+    }
+    saveProgress(currentSpineIndex, section->currentPage, section->pageCount, bookPercent);
+
+    if (lastTrackedSpineIndex != currentSpineIndex || lastTrackedPageIndex != section->currentPage) {
+      if (lastTrackedSpineIndex != -1 && currentSpineIndex != lastTrackedSpineIndex) {
+        PET_MANAGER.onChapterComplete();
+      }
+      PET_MANAGER.onPageTurn();
+      lastTrackedSpineIndex = currentSpineIndex;
+      lastTrackedPageIndex = section->currentPage;
+    }
+  }
 }
 
-void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount) {
+void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount, int bookProgressPercent) {
   FsFile f;
   if (Storage.openFileForWrite("ERS", epub->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[6];
+    const uint8_t pct = static_cast<uint8_t>(bookProgressPercent < 0 ? 0 : (bookProgressPercent > 100 ? 100 : bookProgressPercent));
+    uint8_t data[7];
     data[0] = currentSpineIndex & 0xFF;
     data[1] = (currentSpineIndex >> 8) & 0xFF;
     data[2] = currentPage & 0xFF;
     data[3] = (currentPage >> 8) & 0xFF;
     data[4] = pageCount & 0xFF;
     data[5] = (pageCount >> 8) & 0xFF;
-    f.write(data, 6);
+    data[6] = pct;
+    f.write(data, 7);
     f.close();
-    LOG_DBG("ERS", "Progress saved: Chapter %d, Page %d", spineIndex, currentPage);
+    LOG_DBG("ERS", "Progress saved: Chapter %d, Page %d, Book %d%%", spineIndex, currentPage, pct);
   } else {
     LOG_ERR("ERS", "Could not save progress!");
   }

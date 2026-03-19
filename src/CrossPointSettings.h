@@ -120,7 +120,7 @@ class CrossPointSettings {
   enum HIDE_BATTERY_PERCENTAGE { HIDE_NEVER = 0, HIDE_READER = 1, HIDE_ALWAYS = 2, HIDE_BATTERY_PERCENTAGE_COUNT };
 
   // UI Theme
-  enum UI_THEME { CLASSIC = 0, LYRA = 1, LYRA_3_COVERS = 2 };
+  enum UI_THEME { CLASSIC = 0, LYRA = 1, LYRA_3_COVERS = 2, CARDS = 3 };
 
   // Sleep screen settings
   uint8_t sleepScreen = DARK;
@@ -176,6 +176,10 @@ class CrossPointSettings {
   uint8_t embeddedStyle = 1;
   // Bluetooth enabled state (persistent)
   uint8_t bluetoothEnabled = 0;
+  // BLE bonded remote settings
+  char bleBondedDeviceAddr[18] = "";       // "XX:XX:XX:XX:XX:XX"
+  char bleBondedDeviceName[32] = "";       // Display name of bonded remote
+  uint8_t bleBondedDeviceAddrType = 0;     // 0=public, 1=random
 
   ~CrossPointSettings() = default;
 

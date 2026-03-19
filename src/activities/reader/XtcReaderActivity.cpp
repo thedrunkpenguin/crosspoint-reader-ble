@@ -19,6 +19,7 @@
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "pet/PetManager.h"
 
 namespace {
 constexpr unsigned long skipPageMs = 700;
@@ -125,12 +126,14 @@ void XtcReaderActivity::loop() {
     } else {
       currentPage = 0;
     }
+    PET_MANAGER.onPageTurn();
     requestUpdate();
   } else if (nextTriggered) {
     currentPage += skipAmount;
     if (currentPage >= xtc->getPageCount()) {
       currentPage = xtc->getPageCount();  // Allow showing "End of book"
     }
+    PET_MANAGER.onPageTurn();
     requestUpdate();
   }
 }
@@ -154,9 +157,19 @@ void XtcReaderActivity::render(Activity::RenderLock&&) {
 }
 
 void XtcReaderActivity::renderPage() {
-  const uint16_t pageWidth = xtc->getPageWidth();
-  const uint16_t pageHeight = xtc->getPageHeight();
-  const uint8_t bitDepth = xtc->getBitDepth();
+  xtc::PageInfo pageInfo{};
+  const bool hasPageInfo = xtc->getPageInfo(currentPage, pageInfo);
+  const uint16_t pageWidth = hasPageInfo ? pageInfo.width : xtc->getPageWidth();
+  const uint16_t pageHeight = hasPageInfo ? pageInfo.height : xtc->getPageHeight();
+  const uint8_t bitDepth = hasPageInfo ? pageInfo.bitDepth : xtc->getBitDepth();
+
+  if (pageWidth == 0 || pageHeight == 0) {
+    LOG_ERR("XTR", "Invalid page geometry for page %lu: %ux%u", currentPage, pageWidth, pageHeight);
+    renderer.clearScreen();
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+    renderer.displayBuffer();
+    return;
+  }
 
   // Calculate buffer size for one page
   // XTG (1-bit): Row-major, ((width+7)/8) * height bytes
@@ -181,10 +194,15 @@ void XtcReaderActivity::renderPage() {
   // Load page data
   size_t bytesRead = xtc->loadPage(currentPage, pageBuffer, pageBufferSize);
   if (bytesRead == 0) {
-    LOG_ERR("XTR", "Failed to load page %lu", currentPage);
+    const auto pageErr = xtc->getLastError();
+    LOG_ERR("XTR", "Failed to load page %lu (%s)", currentPage, xtc::errorToString(pageErr));
     free(pageBuffer);
     renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+    if (pageErr == xtc::XtcError::MEMORY_ERROR) {
+      renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_MEMORY_ERROR), true, EpdFontFamily::BOLD);
+    } else {
+      renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+    }
     renderer.displayBuffer();
     return;
   }

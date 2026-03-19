@@ -135,6 +135,9 @@ uint8_t CrossPointSettings::writeSettings(FsFile& file, bool count_only) const {
   writer.writeItem(file, fadingFix);
   writer.writeItem(file, embeddedStyle);
   // New fields need to be added at end for backward compatibility
+  writer.writeItemString(file, bleBondedDeviceAddr);
+  writer.writeItemString(file, bleBondedDeviceName);
+  writer.writeItem(file, bleBondedDeviceAddrType);
 
   return writer.item_count;
 }
@@ -262,6 +265,22 @@ bool CrossPointSettings::loadFromFile() {
     serialization::readPod(inputFile, embeddedStyle);
     if (++settingsRead >= fileSettingsCount) break;
     // New fields added at end for backward compatibility
+    {
+      std::string addrStr;
+      serialization::readString(inputFile, addrStr);
+      strncpy(bleBondedDeviceAddr, addrStr.c_str(), sizeof(bleBondedDeviceAddr) - 1);
+      bleBondedDeviceAddr[sizeof(bleBondedDeviceAddr) - 1] = '\0';
+    }
+    if (++settingsRead >= fileSettingsCount) break;
+    {
+      std::string nameStr;
+      serialization::readString(inputFile, nameStr);
+      strncpy(bleBondedDeviceName, nameStr.c_str(), sizeof(bleBondedDeviceName) - 1);
+      bleBondedDeviceName[sizeof(bleBondedDeviceName) - 1] = '\0';
+    }
+    if (++settingsRead >= fileSettingsCount) break;
+    readAndValidate(inputFile, bleBondedDeviceAddrType, 2);
+    if (++settingsRead >= fileSettingsCount) break;
   } while (false);
 
   if (frontButtonMappingRead) {

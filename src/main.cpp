@@ -28,12 +28,18 @@
 #include "activities/home/HomeActivity.h"
 #include "activities/home/MyLibraryActivity.h"
 #include "activities/home/RecentBooksActivity.h"
+#include "activities/home/VirtualPetActivity.h"
 #include "activities/network/CrossPointWebServerActivity.h"
 #include "activities/reader/ReaderActivity.h"
 #include "activities/settings/SettingsActivity.h"
+#include "activities/game/GameActivity.h"
+#include "activities/game/GamePickerActivity.h"
+#include "activities/game/GameTitleActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "game/GameState.h"
+#include "pet/PetManager.h"
 #include "util/ButtonNavigator.h"
 
 HalDisplay display;
@@ -230,6 +236,7 @@ void enterDeepSleep() {
 void onGoHome();
 void onGoToMyLibraryWithPath(const std::string& path);
 void onGoToRecentBooks();
+void onGoToPet();
 void onGoToReader(const std::string& initialEpubPath) {
   const std::string bookPath = initialEpubPath;  // Copy before exitActivity() invalidates the reference
   exitActivity();
@@ -268,14 +275,34 @@ void onGoToBrowser() {
 }
 #endif
 
+void onStartGame();
+
+void onGoToGame() {
+  exitActivity();
+  enterNewActivity(new GamePickerActivity(renderer, mappedInputManager, onGoHome, onStartGame));
+}
+
+void onGoToPet() {
+  exitActivity();
+  enterNewActivity(new VirtualPetActivity(renderer, mappedInputManager, onGoHome));
+}
+
+void onStartGame() {
+  if (!GAME_STATE.hasSaveFile()) {
+    GAME_STATE.newGame(static_cast<uint32_t>(millis()) ^ 0xDEADBEEF);
+  }
+  exitActivity();
+  enterNewActivity(new GameActivity(renderer, mappedInputManager, onGoToGame));
+}
+
 void onGoHome() {
   exitActivity();
 #ifdef DISABLE_OPDS
   enterNewActivity(new HomeActivity(renderer, mappedInputManager, onGoToReader, onGoToMyLibrary, onGoToRecentBooks,
-                                    onGoToSettings, onGoToFileTransfer, nullptr));
+                                    onGoToSettings, onGoToFileTransfer, nullptr, onGoToGame, onGoToPet));
 #else
   enterNewActivity(new HomeActivity(renderer, mappedInputManager, onGoToReader, onGoToMyLibrary, onGoToRecentBooks,
-                                    onGoToSettings, onGoToFileTransfer, onGoToBrowser));
+                                    onGoToSettings, onGoToFileTransfer, onGoToBrowser, onGoToGame, onGoToPet));
 #endif
 }
 
@@ -338,6 +365,7 @@ void setup() {
 
   SETTINGS.loadFromFile();
   I18N.loadSettings();
+  PET_MANAGER.load();
   KOREADER_STORE.loadFromFile();
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
@@ -348,6 +376,7 @@ void setup() {
     btMgr.setButtonInjector([](uint8_t buttonIndex) {
       gpio.injectButtonPress(buttonIndex);
     });
+    btMgr.setBondedDevice(SETTINGS.bleBondedDeviceAddr, SETTINGS.bleBondedDeviceName);
     LOG_INF("MAIN", "Bluetooth HID initialized with button injection");
   } catch (...) {
     LOG_ERR("MAIN", "Failed to initialize Bluetooth HID");
@@ -406,11 +435,15 @@ void loop() {
   static unsigned long lastMemPrint = 0;
 
   gpio.update();
+  const bool userInputDetected = gpio.wasAnyPressed() || gpio.wasAnyReleased();
+  bool bleRecentActivity = false;
 
   // Check for Bluetooth inactivity timeouts and auto-reconnect
   try {
-    BluetoothHIDManager::getInstance().updateActivity();
-    BluetoothHIDManager::getInstance().checkAutoReconnect();
+    auto& btMgr = BluetoothHIDManager::getInstance();
+    btMgr.updateActivity();
+    btMgr.checkAutoReconnect(userInputDetected);
+    bleRecentActivity = btMgr.hasRecentActivity();
   } catch (...) {
     // Ignore errors in Bluetooth management
   }
@@ -443,21 +476,9 @@ void loop() {
   static unsigned long lastActivityTime = millis();
   
   // Check for physical button presses, virtual button presses, or activity prevention
-  bool hasActivity = gpio.wasAnyPressed() || gpio.wasAnyReleased() || 
+  bool hasActivity = userInputDetected || 
                      (currentActivity && currentActivity->preventAutoSleep());
-  
-  // Also check for recent BLE activity to prevent power sleep during BLE use
-  try {
-    const auto& btMgr = BluetoothHIDManager::getInstance();
-    if (btMgr.isEnabled()) {
-      // If BLE is enabled, check if there's been recent activity
-      // We consider that activity if the manager has been tracking it
-      // (This prevents the system from sleeping while using BLE controller)
-      hasActivity = hasActivity || btMgr.hasRecentActivity();
-    }
-  } catch (...) {
-    // Ignore BLE check errors
-  }
+  hasActivity = hasActivity || bleRecentActivity;
   
   if (hasActivity) {
     lastActivityTime = millis();         // Reset inactivity timer

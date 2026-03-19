@@ -21,13 +21,16 @@ class EpubReaderActivity final : public ActivityWithSubactivity {
   bool pendingSubactivityExit = false;  // Defer subactivity exit to avoid use-after-free
   bool pendingGoHome = false;           // Defer go home to avoid race condition with display task
   bool skipNextButtonCheck = false;     // Skip button processing for one frame after subactivity exit
+  int lastTrackedSpineIndex = -1;
+  int lastTrackedPageIndex = -1;
+  bool bookFinishedReported = false;
   const std::function<void()> onGoBack;
   const std::function<void()> onGoHome;
 
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
   void renderStatusBar(int orientedMarginRight, int orientedMarginBottom, int orientedMarginLeft) const;
-  void saveProgress(int spineIndex, int currentPage, int pageCount);
+  void saveProgress(int spineIndex, int currentPage, int pageCount, int bookProgressPercent = 0);
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   void onReaderMenuBack(uint8_t orientation);

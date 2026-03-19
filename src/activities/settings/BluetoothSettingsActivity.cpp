@@ -3,8 +3,10 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <cstring>
 
 #include "CrossPointSettings.h"
+#include "DeviceProfiles.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -16,6 +18,12 @@ void BluetoothSettingsActivity::onEnter() {
   viewMode = ViewMode::MAIN_MENU;
   lastError = "";
   lastScanTime = 0;
+  pendingLearnKey = 0;
+  pendingLearnIndex = 0xFF;
+  learnedPrevKey = 0;
+  learnedNextKey = 0;
+  learnedReportIndex = 2;
+  learnStep = LearnStep::WAIT_PREV;
   
   // Get BLE manager instance
   try {
@@ -36,6 +44,20 @@ void BluetoothSettingsActivity::onEnter() {
       btMgr->disable();
       lastError = "Bluetooth disabled per settings";
     }
+
+    btMgr->setLearnInputCallback([this](uint8_t keycode, uint8_t reportIndex) {
+      if (keycode > 0 && reportIndex != 0xFF) {
+        pendingLearnKey = keycode;
+        pendingLearnIndex = reportIndex;
+      }
+    });
+
+    // Keep legacy callback enabled for any non-learn consumers.
+    btMgr->setInputCallback([this](uint16_t keycode) {
+      if (pendingLearnKey == 0 && keycode > 0 && keycode <= 0xFF) {
+        pendingLearnKey = static_cast<uint8_t>(keycode);
+      }
+    });
   } catch (const std::exception& e) {
     LOG_ERR("BT", "Failed to get BLE manager: %s", e.what());
     lastError = "BLE manager error";
@@ -49,6 +71,14 @@ void BluetoothSettingsActivity::onEnter() {
   requestUpdate();
 }
 
+void BluetoothSettingsActivity::onExit() {
+  if (btMgr) {
+    btMgr->setLearnInputCallback(nullptr);
+    btMgr->setInputCallback(nullptr);
+  }
+  Activity::onExit();
+}
+
 void BluetoothSettingsActivity::loop() {
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     if (viewMode == ViewMode::DEVICE_LIST) {
@@ -58,6 +88,12 @@ void BluetoothSettingsActivity::loop() {
       if (btMgr && btMgr->isScanning()) {
         btMgr->stopScan();
       }
+      requestUpdate();
+      return;
+    } else if (viewMode == ViewMode::LEARN_KEYS) {
+      viewMode = ViewMode::MAIN_MENU;
+      selectedIndex = 0;
+      lastError = "Learn mode canceled";
       requestUpdate();
       return;
     } else {
@@ -76,17 +112,19 @@ void BluetoothSettingsActivity::loop() {
 
   if (viewMode == ViewMode::MAIN_MENU) {
     handleMainMenuInput();
-  } else {
+  } else if (viewMode == ViewMode::DEVICE_LIST) {
     handleDeviceListInput();
+  } else {
+    handleLearnInput();
   }
 }
 
 void BluetoothSettingsActivity::handleMainMenuInput() {
   if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
-    selectedIndex = (selectedIndex > 0) ? selectedIndex - 1 : 1;
+    selectedIndex = (selectedIndex > 0) ? selectedIndex - 1 : 5;
     requestUpdate();
   } else if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
-    selectedIndex = (selectedIndex < 1) ? selectedIndex + 1 : 0;
+    selectedIndex = (selectedIndex < 5) ? selectedIndex + 1 : 0;
     requestUpdate();
   }
   
@@ -129,6 +167,27 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
       }
       requestUpdate();
     } else if (selectedIndex == 1) {
+      if (!btMgr->isEnabled()) {
+        lastError = "Enable BT first";
+      } else if (SETTINGS.bleBondedDeviceAddr[0] == '\0') {
+        lastError = "No bonded remote saved";
+      } else if (btMgr->isConnected(SETTINGS.bleBondedDeviceAddr)) {
+        lastError = "Bonded remote already connected";
+      } else {
+        LOG_INF("BT", "Reconnecting to bonded remote %s (%s)", SETTINGS.bleBondedDeviceName,
+                SETTINGS.bleBondedDeviceAddr);
+        lastError = "Reconnecting...";
+        requestUpdate();
+
+        if (btMgr->connectToDevice(SETTINGS.bleBondedDeviceAddr)) {
+          lastError = std::string("Reconnected to ") +
+                      (SETTINGS.bleBondedDeviceName[0] ? SETTINGS.bleBondedDeviceName : "bonded remote");
+        } else {
+          lastError = btMgr->lastError.empty() ? "Reconnect failed" : btMgr->lastError;
+        }
+      }
+      requestUpdate();
+    } else if (selectedIndex == 2) {
       // Start scan and switch to device list
       if (btMgr->isEnabled()) {
         btMgr->startScan(10000);
@@ -140,7 +199,88 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
         lastError = "Enable BT first";
       }
       requestUpdate();
+    } else if (selectedIndex == 3) {
+      if (!btMgr->isEnabled()) {
+        lastError = "Enable BT first";
+      } else if (btMgr->getConnectedDevices().empty()) {
+        lastError = "Connect a remote first";
+      } else {
+        viewMode = ViewMode::LEARN_KEYS;
+        learnStep = LearnStep::WAIT_PREV;
+        pendingLearnKey = 0;
+        pendingLearnIndex = 0xFF;
+        learnedPrevKey = 0;
+        learnedNextKey = 0;
+        learnedReportIndex = 2;
+        lastError = "Press PREVIOUS PAGE button";
+      }
+      requestUpdate();
+    } else if (selectedIndex == 4) {
+      DeviceProfiles::clearCustomProfile();
+      lastError = "Learned mapping cleared";
+      requestUpdate();
+    } else if (selectedIndex == 5) {
+      SETTINGS.bleBondedDeviceAddr[0] = '\0';
+      SETTINGS.bleBondedDeviceName[0] = '\0';
+      SETTINGS.bleBondedDeviceAddrType = 0;
+      SETTINGS.saveToFile();
+      btMgr->setBondedDevice("", "");
+      lastError = "Bonded remote cleared";
+      requestUpdate();
     }
+  }
+}
+
+void BluetoothSettingsActivity::handleLearnInput() {
+  if (pendingLearnKey != 0) {
+    const uint8_t capturedKey = pendingLearnKey;
+    const uint8_t capturedIndex = pendingLearnIndex;
+    pendingLearnKey = 0;
+    pendingLearnIndex = 0xFF;
+
+    if (learnStep == LearnStep::WAIT_PREV) {
+      learnedPrevKey = capturedKey;
+      learnedReportIndex = (capturedIndex == 0xFF) ? 2 : capturedIndex;
+      learnStep = LearnStep::WAIT_NEXT;
+      char buf[96];
+      snprintf(buf, sizeof(buf), "Prev=0x%02X @byte[%u], press NEXT", learnedPrevKey,
+               static_cast<unsigned>(learnedReportIndex));
+      lastError = buf;
+      requestUpdate();
+      return;
+    }
+
+    if (learnStep == LearnStep::WAIT_NEXT) {
+      if (capturedKey == learnedPrevKey) {
+        lastError = "Next key must be different";
+        requestUpdate();
+        return;
+      }
+
+      if (capturedIndex != 0xFF && capturedIndex != learnedReportIndex) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "NEXT key must use byte[%u]", static_cast<unsigned>(learnedReportIndex));
+        lastError = buf;
+        requestUpdate();
+        return;
+      }
+
+      learnedNextKey = capturedKey;
+      DeviceProfiles::setCustomProfile(learnedPrevKey, learnedNextKey, learnedReportIndex);
+      learnStep = LearnStep::DONE;
+      char buf[96];
+      snprintf(buf, sizeof(buf), "Saved Prev=0x%02X Next=0x%02X @byte[%u]", learnedPrevKey, learnedNextKey,
+               static_cast<unsigned>(learnedReportIndex));
+      lastError = buf;
+      requestUpdate();
+      return;
+    }
+  }
+
+  if (learnStep == LearnStep::DONE && mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    viewMode = ViewMode::MAIN_MENU;
+    selectedIndex = 0;
+    requestUpdate();
   }
 }
 
@@ -224,8 +364,20 @@ void BluetoothSettingsActivity::handleDeviceListInput() {
       requestUpdate();
       
       if (btMgr->connectToDevice(device.address)) {
-        lastError = std::string("Connected to ") + device.name;
+        strncpy(SETTINGS.bleBondedDeviceAddr, device.address.c_str(), sizeof(SETTINGS.bleBondedDeviceAddr) - 1);
+        SETTINGS.bleBondedDeviceAddr[sizeof(SETTINGS.bleBondedDeviceAddr) - 1] = '\0';
+        strncpy(SETTINGS.bleBondedDeviceName, device.name.c_str(), sizeof(SETTINGS.bleBondedDeviceName) - 1);
+        SETTINGS.bleBondedDeviceName[sizeof(SETTINGS.bleBondedDeviceName) - 1] = '\0';
+        SETTINGS.bleBondedDeviceAddrType = 0;
+        SETTINGS.saveToFile();
+        btMgr->setBondedDevice(device.address, device.name);
+
+        lastError = "Bluetooth enabled";
         LOG_INF("BT", "Successfully connected to %s", device.name.c_str());
+        if (exitOnSuccessfulConnect) {
+          if (onComplete) onComplete();
+          return;
+        }
       } else {
         lastError = btMgr->lastError.empty() ? "Connection failed" : btMgr->lastError;
         LOG_ERR("BT", "Failed to connect: %s", lastError.c_str());
@@ -238,8 +390,10 @@ void BluetoothSettingsActivity::handleDeviceListInput() {
 void BluetoothSettingsActivity::render(Activity::RenderLock&&) {
   if (viewMode == ViewMode::MAIN_MENU) {
     renderMainMenu();
-  } else {
+  } else if (viewMode == ViewMode::DEVICE_LIST) {
     renderDeviceList();
+  } else {
+    renderLearnKeys();
   }
 }
 
@@ -275,31 +429,57 @@ void BluetoothSettingsActivity::renderMainMenu() {
   GUI.drawSubHeader(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight},
                     statusLine.c_str());
 
+  int listOffsetY = 0;
+  if (btMgr && btMgr->isEnabled() && SETTINGS.bleBondedDeviceName[0] != '\0') {
+    const int nameY = metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + 4;
+    std::string deviceLine = std::string("Remote: ") + SETTINGS.bleBondedDeviceName;
+    deviceLine = renderer.truncatedText(UI_10_FONT_ID, deviceLine.c_str(), pageWidth - metrics.contentSidePadding * 2);
+    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, nameY, deviceLine.c_str(), true);
+    listOffsetY = renderer.getLineHeight(UI_10_FONT_ID) + 4;
+  }
+
   // Use GUI.drawList for consistent formatting with main settings
   const char* items[] = {
     btMgr && btMgr->isEnabled() ? "Disable Bluetooth" : "Enable Bluetooth",
-    "Scan for Devices"
+    "Reconnect Bonded Remote",
+    "Scan for Devices",
+    "Learn Page-Turn Keys",
+    "Clear Learned Keys",
+    "Forget Bonded Remote"
   };
 
   std::vector<std::string> itemLabels;
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < 6; i++) {
     itemLabels.push_back(items[i]);
   }
 
   GUI.drawList(
       renderer,
-      Rect{0, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing, pageWidth,
+      Rect{0,
+           metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing + listOffsetY,
+           pageWidth,
            pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.buttonHintsHeight +
-                         metrics.verticalSpacing * 2)},
-      2, selectedIndex,
+                         metrics.verticalSpacing * 2 + listOffsetY)},
+      6, selectedIndex,
       [&itemLabels](int index) { return itemLabels[index]; }, nullptr, nullptr,
       [this](int i) {
-        if (!lastError.empty()) {
-          return lastError;
+        if (i == 0) {
+          return std::string(btMgr && btMgr->isEnabled() ? tr(STR_STATE_ON) : tr(STR_STATE_OFF));
+        }
+        if (i == 1 && SETTINGS.bleBondedDeviceName[0] != '\0') {
+          return renderer.truncatedText(UI_10_FONT_ID, SETTINGS.bleBondedDeviceName,
+                                        renderer.getScreenWidth() - UITheme::getInstance().getMetrics().contentSidePadding * 4);
         }
         return std::string("");
       },
       true);
+
+  if (!lastError.empty()) {
+    std::string statusText = renderer.truncatedText(UI_10_FONT_ID, lastError.c_str(),
+                                                    pageWidth - metrics.contentSidePadding * 2);
+    const int statusY = pageHeight - metrics.buttonHintsHeight - metrics.contentSidePadding - renderer.getLineHeight(UI_10_FONT_ID);
+    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, statusY, statusText.c_str(), true);
+  }
 
   // Button hints
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
@@ -422,4 +602,51 @@ std::string BluetoothSettingsActivity::getSignalStrengthIndicator(const int32_t 
     return "  ||";  // Fair
   }
   return "   |";  // Very weak
+}
+
+void BluetoothSettingsActivity::renderLearnKeys() {
+  auto metrics = UITheme::getInstance().getMetrics();
+  const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
+
+  renderer.clearScreen();
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, "Learn Page-Turn Keys");
+
+  const char* stepText = "Press PREVIOUS PAGE button";
+  if (learnStep == LearnStep::WAIT_NEXT) {
+    stepText = "Press NEXT PAGE button";
+  } else if (learnStep == LearnStep::DONE) {
+    stepText = "Learning complete";
+  }
+
+  GUI.drawSubHeader(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight},
+                    stepText);
+
+  char line1[64];
+  char line2[64];
+  snprintf(line1, sizeof(line1), "Prev key: %s", learnedPrevKey ? "captured" : "waiting");
+  snprintf(line2, sizeof(line2), "Next key: %s", learnedNextKey ? "captured" : "waiting");
+
+  renderer.drawCenteredText(UI_12_FONT_ID, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + 32,
+                            line1);
+  renderer.drawCenteredText(UI_12_FONT_ID, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + 56,
+                            line2);
+
+  if (learnedPrevKey) {
+    char line3[48];
+    snprintf(line3, sizeof(line3), "Report byte: [%u]", static_cast<unsigned>(learnedReportIndex));
+    renderer.drawCenteredText(UI_10_FONT_ID, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + 80,
+                              line3);
+  }
+
+  if (!lastError.empty()) {
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight - metrics.buttonHintsHeight - 16, lastError.c_str());
+  }
+
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK),
+                                            learnStep == LearnStep::DONE ? tr(STR_SELECT) : "",
+                                            "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+
+  renderer.displayBuffer();
 }

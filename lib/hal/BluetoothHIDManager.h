@@ -24,11 +24,14 @@ struct ConnectedDevice {
   std::string name;
   NimBLEClient* client = nullptr;
   std::vector<NimBLERemoteCharacteristic*> reportChars;
+  unsigned long connectedTime = 0;    // Timestamp when BLE link was established
   bool subscribed = false;
   unsigned long lastActivityTime = 0;  // Timestamp of last HID report received
   uint8_t lastHIDKeycode = 0x00;       // Track last keycode to detect press/release transitions
   unsigned long lastInjectionTime = 0; // Cooldown for button injection to prevent flooding
+  uint8_t lastInjectedKeycode = 0x00;  // Track last injected key for smarter cooldown
   bool wasConnected = false;           // Track if this device was previously connected for auto-reconnect
+  bool hasSeenRelease = false;         // Ignore startup noise until a release frame is seen
   bool lastButtonState = false;        // Track button pressed state (from byte[0])
   const DeviceProfiles::DeviceProfile* profile = nullptr;  // Device-specific HID profile
 };
@@ -58,9 +61,11 @@ public:
   // Input handling
   void processInputEvents();
   void setInputCallback(std::function<void(uint16_t keycode)> callback);
+  void setLearnInputCallback(std::function<void(uint8_t keycode, uint8_t reportIndex)> callback);
   void setButtonInjector(std::function<void(uint8_t buttonIndex)> injector);
+  void setBondedDevice(const std::string& address, const std::string& name = "");
   void updateActivity();  // Call periodically to check inactivity timeout
-  void checkAutoReconnect();  // Auto-reconnect to previously connected devices if disconnected
+  void checkAutoReconnect(bool userInputDetected = false);  // Reconnect bonded device when disconnected
   
   // Check if BLE has had activity recently (within last 4 minutes)
   // Used by power manager to prevent sleep during BLE use
@@ -92,9 +97,12 @@ private:
   std::vector<BluetoothDevice> _discoveredDevices;
   std::vector<ConnectedDevice> _connectedDevices;
   std::function<void(uint16_t)> _inputCallback;
+  std::function<void(uint8_t, uint8_t)> _learnInputCallback;
   std::function<void(uint8_t)> _buttonInjector;
+  std::string _bondedDeviceAddress;
+  std::string _bondedDeviceName;
   
   // Inactivity timeout (milliseconds)
-  static constexpr unsigned long INACTIVITY_TIMEOUT_MS = 120000;  // 2 minutes
+  static constexpr unsigned long INACTIVITY_TIMEOUT_MS = 300000;  // 5 minutes
   unsigned long lastMaintenanceCheck = 0;
 };

@@ -26,6 +26,8 @@ class HomeActivity final : public Activity {
   const std::function<void()> onSettingsOpen;
   const std::function<void()> onFileTransferOpen;
   const std::function<void()> onOpdsBrowserOpen;
+  const std::function<void()> onGameOpen;
+  const std::function<void()> onPetOpen;
 
   int getMenuItemCount() const;
   bool storeCoverBuffer();    // Store frame buffer for cover image
@@ -33,20 +35,24 @@ class HomeActivity final : public Activity {
   void freeCoverBuffer();     // Free the stored cover buffer
   void loadRecentBooks(int maxBooks);
   void loadRecentCovers(int coverHeight);
+  int getRecentBookProgressPercent(const RecentBook& book) const;
 
  public:
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                         const std::function<void(const std::string& path)>& onSelectBook,
                         const std::function<void()>& onMyLibraryOpen, const std::function<void()>& onRecentsOpen,
                         const std::function<void()>& onSettingsOpen, const std::function<void()>& onFileTransferOpen,
-                        const std::function<void()>& onOpdsBrowserOpen)
+                        const std::function<void()>& onOpdsBrowserOpen, const std::function<void()>& onGameOpen,
+                        const std::function<void()>& onPetOpen)
       : Activity("Home", renderer, mappedInput),
         onSelectBook(onSelectBook),
         onMyLibraryOpen(onMyLibraryOpen),
         onRecentsOpen(onRecentsOpen),
         onSettingsOpen(onSettingsOpen),
         onFileTransferOpen(onFileTransferOpen),
-        onOpdsBrowserOpen(onOpdsBrowserOpen) {}
+        onOpdsBrowserOpen(onOpdsBrowserOpen),
+        onGameOpen(onGameOpen),
+        onPetOpen(onPetOpen) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

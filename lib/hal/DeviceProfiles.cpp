@@ -1,7 +1,44 @@
 #include "DeviceProfiles.h"
 
+#include <cstdio>
 #include <cstring>
 #include <Logging.h>
+#include <HalStorage.h>
+
+namespace {
+constexpr const char* CUSTOM_PROFILE_FILE = "/.crosspoint/ble_custom_profile.txt";
+
+DeviceProfiles::DeviceProfile customProfile = {"Custom BLE Remote", nullptr, 0x00, 0x00, false, 2};
+bool customProfileLoaded = false;
+
+void loadCustomProfileFromStorage() {
+  if (customProfileLoaded) {
+    return;
+  }
+  customProfileLoaded = true;
+
+  if (!Storage.exists(CUSTOM_PROFILE_FILE)) {
+    return;
+  }
+
+  String content = Storage.readFile(CUSTOM_PROFILE_FILE);
+  if (content.isEmpty()) {
+    return;
+  }
+
+  unsigned int up = 0;
+  unsigned int down = 0;
+  unsigned int reportIndex = 2;
+  const int parsed = sscanf(content.c_str(), "%u,%u,%u", &up, &down, &reportIndex);
+  if ((parsed == 2 || parsed == 3) && up <= 0xFF && down <= 0xFF && up != 0 && down != 0 && reportIndex <= 0xFF) {
+    customProfile.pageUpCode = static_cast<uint8_t>(up);
+    customProfile.pageDownCode = static_cast<uint8_t>(down);
+    customProfile.reportByteIndex = static_cast<uint8_t>(reportIndex);
+    LOG_INF("DEV", "Loaded custom BLE profile: up=0x%02X down=0x%02X idx=%u", customProfile.pageUpCode,
+            customProfile.pageDownCode, static_cast<unsigned>(customProfile.reportByteIndex));
+  }
+}
+}  // namespace
 
 namespace DeviceProfiles {
 
@@ -58,6 +95,13 @@ const DeviceProfile* findDeviceProfile(const char* macAddress, const char* devic
           return &KNOWN_DEVICES[0];  // Return GameBrick profile
         }
       }
+
+      // Match IINE_control naming used by some GameBrick remotes
+      if (strstr(deviceName, "IINE") || strstr(deviceName, "iine") ||
+          strstr(deviceName, "IINE_control") || strstr(deviceName, "iine_control")) {
+        LOG_INF("DEV", "✓ Matched GameBrick by IINE naming: %s", deviceName);
+        return &KNOWN_DEVICES[0];
+      }
       
       // Match MINI_KEYBOARD variants
       if (strstr(deviceName, "MINI") || strstr(deviceName, "mini") || 
@@ -81,19 +125,93 @@ bool isStandardConsumerPageCode(uint8_t code) {
   return code == STANDARD_PAGE_UP || code == STANDARD_PAGE_DOWN;
 }
 
+bool isCommonPageTurnCode(uint8_t code) {
+  switch (code) {
+    // Consumer page navigation
+    case STANDARD_PAGE_UP:
+    case STANDARD_PAGE_DOWN:
+
+    // Keyboard page/navigation keys
+    case KEYBOARD_PAGE_UP:
+    case KEYBOARD_PAGE_DOWN:
+    case KEYBOARD_UP_ARROW:
+    case KEYBOARD_DOWN_ARROW:
+    case KEYBOARD_LEFT_ARROW:
+    case KEYBOARD_RIGHT_ARROW:
+
+    // Common clicker/media mappings often used by low-cost BLE remotes
+    case KEYBOARD_SPACE:
+    case KEYBOARD_ENTER:
+    case KEYBOARD_VOLUME_UP:
+    case KEYBOARD_VOLUME_DOWN:
+
+    // Existing GameBrick fallback codes
+    case 0x07:
+    case 0x09:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool mapCommonCodeToDirection(uint8_t code, bool& pageForward) {
+  switch (code) {
+    // Next page
+    case STANDARD_PAGE_UP:
+    case KEYBOARD_PAGE_DOWN:
+    case KEYBOARD_DOWN_ARROW:
+    case KEYBOARD_RIGHT_ARROW:
+    case KEYBOARD_SPACE:
+    case KEYBOARD_ENTER:
+    case KEYBOARD_VOLUME_UP:
+    case 0x07:
+      pageForward = true;
+      return true;
+
+    // Previous page
+    case STANDARD_PAGE_DOWN:
+    case KEYBOARD_PAGE_UP:
+    case KEYBOARD_UP_ARROW:
+    case KEYBOARD_LEFT_ARROW:
+    case KEYBOARD_VOLUME_DOWN:
+    case 0x09:
+      pageForward = false;
+      return true;
+
+    default:
+      return false;
+  }
+}
+
 const DeviceProfile* getCustomProfile() {
-  // TODO: Implement settings persistence for custom profiles
-  // For now, return nullptr (no custom profile set)
-  return nullptr;
+  loadCustomProfileFromStorage();
+  if (customProfile.pageUpCode == 0x00 || customProfile.pageDownCode == 0x00) {
+    return nullptr;
+  }
+  return &customProfile;
 }
 
 void setCustomProfile(uint8_t pageUpCode, uint8_t pageDownCode, uint8_t reportByteIndex) {
-  // TODO: Implement settings persistence for custom profiles
-  LOG_INF("DEV", "Custom profile set: up=0x%02X down=0x%02X byte=%d", pageUpCode, pageDownCode, reportByteIndex);
+  customProfile.pageUpCode = pageUpCode;
+  customProfile.pageDownCode = pageDownCode;
+  customProfile.reportByteIndex = reportByteIndex;
+  customProfileLoaded = true;
+
+  Storage.mkdir("/.crosspoint");
+  char buf[24];
+  snprintf(buf, sizeof(buf), "%u,%u,%u", static_cast<unsigned>(pageUpCode), static_cast<unsigned>(pageDownCode),
+           static_cast<unsigned>(reportByteIndex));
+  Storage.writeFile(CUSTOM_PROFILE_FILE, buf);
+  LOG_INF("DEV", "Custom profile set: up=0x%02X down=0x%02X idx=%u", pageUpCode, pageDownCode,
+          static_cast<unsigned>(reportByteIndex));
 }
 
 void clearCustomProfile() {
-  // TODO: Implement settings clearing
+  customProfile.pageUpCode = 0x00;
+  customProfile.pageDownCode = 0x00;
+  customProfile.reportByteIndex = 2;
+  customProfileLoaded = true;
+  Storage.remove(CUSTOM_PROFILE_FILE);
   LOG_INF("DEV", "Custom profile cleared");
 }
 

@@ -621,6 +621,11 @@ bool Epub::generateThumbBmp(int height) const {
     return true;
   }
 
+  // Use requested height (capped) to improve clarity while keeping memory bounded.
+  // Typical cover ratio is ~2:3 (width:height).
+  const int thumbTargetHeight = std::max(180, std::min(height, 480));
+  const int thumbTargetWidth = std::max(120, (thumbTargetHeight * 2) / 3);
+
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
     LOG_ERR("EBP", "Cannot generate thumb BMP, cache not loaded");
     return false;
@@ -651,13 +656,8 @@ bool Epub::generateThumbBmp(int height) const {
       return false;
     }
     
-    // Use VERY small target size to avoid memory exhaustion in JPEG decoder
-    // TARGET: 120x180 pixels max (1/4 of original target)
-    // This reduces memory requirements from ~200KB to <50KB
-    int THUMB_TARGET_WIDTH = 120;
-    int THUMB_TARGET_HEIGHT = 180;
-    const bool success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(coverJpg, thumbBmp, THUMB_TARGET_WIDTH,
-                                                                              THUMB_TARGET_HEIGHT);
+    const bool success =
+      JpegToBmpConverter::jpegFileToBmpStreamWithSize(coverJpg, thumbBmp, thumbTargetWidth, thumbTargetHeight);
     coverJpg.close();
     thumbBmp.close();
     Storage.remove(coverJpgTempPath.c_str());
@@ -666,7 +666,7 @@ bool Epub::generateThumbBmp(int height) const {
       LOG_ERR("EBP", "Failed to generate thumb BMP from JPG cover image (mem error or unsupported)");
       Storage.remove(getThumbBmpPath(height).c_str());
     } else {
-      LOG_INF("EBP", "Generated lightweight thumb BMP from JPG cover image");
+      LOG_INF("EBP", "Generated thumb BMP from JPG cover image (%dx%d)", thumbTargetWidth, thumbTargetHeight);
     }
     return success;
   } else if (coverImageHref.substr(coverImageHref.length() - 4) == ".png") {
@@ -690,12 +690,8 @@ bool Epub::generateThumbBmp(int height) const {
       return false;
     }
     
-    // Use VERY small target size to avoid memory exhaustion
-    // 120x180 pixels max for PNG as well
-    int THUMB_TARGET_WIDTH = 120;
-    int THUMB_TARGET_HEIGHT = 180;
     const bool success =
-        PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(coverPng, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT);
+      PngToBmpConverter::pngFileToBmpStreamWithSize(coverPng, thumbBmp, thumbTargetWidth, thumbTargetHeight);
     coverPng.close();
     thumbBmp.close();
     Storage.remove(coverPngTempPath.c_str());
@@ -704,7 +700,7 @@ bool Epub::generateThumbBmp(int height) const {
       LOG_ERR("EBP", "Failed to generate thumb BMP from PNG cover image (mem error or unsupported)");
       Storage.remove(getThumbBmpPath(height).c_str());
     } else {
-      LOG_INF("EBP", "Generated lightweight thumb BMP from PNG cover image");
+      LOG_INF("EBP", "Generated thumb BMP from PNG cover image (%dx%d)", thumbTargetWidth, thumbTargetHeight);
     }
     return success;
   } else {

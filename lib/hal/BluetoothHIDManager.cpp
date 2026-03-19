@@ -2,6 +2,7 @@
 #include <Logging.h>
 #include <NimBLEDevice.h>
 #include <HalGPIO.h>
+#include <HalPowerManager.h>
 #include <WiFi.h>
 
 // HID Service and characteristic UUIDs
@@ -9,13 +10,56 @@ static const char* HID_SERVICE_UUID = "1812";
 static const char* HID_REPORT_UUID = "2A4D";
 static const char* HID_INFO_UUID = "2A4A";
 
+struct ExtractedHIDKey {
+  uint8_t keycode = 0x00;
+  uint8_t reportIndex = 0xFF;
+};
+
+static ExtractedHIDKey extractGenericPageTurnKeycode(const uint8_t* report, size_t length) {
+  ExtractedHIDKey result;
+
+  if (!report || length == 0) {
+    return result;
+  }
+
+  // First pass: prefer known page-turn keycodes anywhere in short reports.
+  const size_t scanLen = length < 8 ? length : 8;
+  for (size_t i = 0; i < scanLen; i++) {
+    const uint8_t code = report[i];
+    if (DeviceProfiles::isCommonPageTurnCode(code)) {
+      result.keycode = code;
+      result.reportIndex = static_cast<uint8_t>(i);
+      return result;
+    }
+  }
+
+  // Second pass: typical keyboard report key slots (bytes 2..7)
+  for (size_t i = 2; i < scanLen; i++) {
+    if (report[i] != 0x00) {
+      result.keycode = report[i];
+      result.reportIndex = static_cast<uint8_t>(i);
+      return result;
+    }
+  }
+
+  // Final fallback for non-keyboard HID layouts: first non-zero byte.
+  for (size_t i = 0; i < scanLen; i++) {
+    if (report[i] != 0x00) {
+      result.keycode = report[i];
+      result.reportIndex = static_cast<uint8_t>(i);
+      return result;
+    }
+  }
+
+  return result;
+}
+
 // Global static for singleton
 static BluetoothHIDManager* g_instance = nullptr;
 
 // Scan callbacks for NimBLE 2.x - keep as static to ensure it stays alive
 class ScanCallbacks : public NimBLEScanCallbacks {
   void onResult(const NimBLEAdvertisedDevice* advertisedDevice) override {
-    LOG_DBG("BT", "onResult callback triggered!");
     if (g_instance) {
       // onScanResult expects non-const pointer, need to cast
       g_instance->onScanResult(const_cast<NimBLEAdvertisedDevice*>(advertisedDevice));
@@ -25,7 +69,8 @@ class ScanCallbacks : public NimBLEScanCallbacks {
   }
   
   void onScanEnd(const NimBLEScanResults& results, int reason) override {
-    LOG_INF("BT", "onScanEnd callback: %d devices, reason: %d", results.getCount(), reason);
+    (void)results;
+    (void)reason;
   }
 };
 
@@ -40,7 +85,6 @@ class ClientCallbacks : public NimBLEClientCallbacks {
   
   void onDisconnect(NimBLEClient* pClient, int reason) override {
     LOG_ERR("BT", "Client disconnected: %s (reason: %d)", pClient->getPeerAddress().toString().c_str(), reason);
-    // Could trigger auto-reconnect here
   }
 };
 
@@ -126,7 +170,7 @@ bool BluetoothHIDManager::disable() {
   }
   
   // Deinitialize NimBLE stack
-  NimBLEDevice::deinit(true);
+  NimBLEDevice::deinit(false);
   
   _enabled = false;
   lastError = "";
@@ -153,14 +197,12 @@ void BluetoothHIDManager::startScan(uint32_t durationMs) {
       return;
     }
     
-    LOG_DBG("BT", "Setting up scan callbacks...");
     // Use static callbacks object to ensure it stays alive
     pScan->setScanCallbacks(&scanCallbacks, false);
     pScan->setActiveScan(true);
     pScan->setInterval(100);
     pScan->setWindow(99);
     
-    LOG_DBG("BT", "Starting continuous scan (duration: 0 = continuous)...");
     // In NimBLE 2.x, duration=0 means scan continuously until stop() is called
     // Parameter 1: 0 = continuous scan
     // Parameter 2: isContinue (false = clear old results)
@@ -172,11 +214,9 @@ void BluetoothHIDManager::startScan(uint32_t durationMs) {
       return;
     }
     
-    LOG_DBG("BT", "Scan started, waiting %lu ms...", durationMs);
     // Wait for the specified duration
     delay(durationMs);
     
-    LOG_DBG("BT", "Stopping scan after %lu ms...", durationMs);
     // Stop the scan
     pScan->stop();
     
@@ -234,10 +274,6 @@ void BluetoothHIDManager::onScanResult(NimBLEAdvertisedDevice* advertisedDevice)
   
   _discoveredDevices.push_back(device);
 
-    const std::string prefix = (address.size() >= 8) ? address.substr(0, 8) : address;
-    LOG_INF("BT", "Scan device: %s (%s) prefix=%s RSSI:%d HID:%d",
-      device.name.c_str(), device.address.c_str(), prefix.c_str(), rssi, isHID);
-  
   LOG_DBG("BT", "Found device: %s (%s) RSSI:%d HID:%d", 
           device.name.c_str(), device.address.c_str(), rssi, isHID);
 }
@@ -258,29 +294,39 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
   LOG_INF("BT", "Connecting to device %s", address.c_str());
   
   try {
-    // Create client
-    NimBLEClient* pClient = NimBLEDevice::createClient();
+    NimBLEAddress bleAddress(address, BLE_ADDR_PUBLIC);
+
+    // Reuse existing disconnected client objects to avoid NimBLE deleteClient() on this target.
+    NimBLEClient* pClient = NimBLEDevice::getClientByPeerAddress(bleAddress);
     if (!pClient) {
-      lastError = "Failed to create client";
+      pClient = NimBLEDevice::getDisconnectedClient();
+      if (pClient) {
+        pClient->setPeerAddress(bleAddress);
+      }
+    }
+    if (!pClient) {
+      pClient = NimBLEDevice::createClient(bleAddress);
+    }
+
+    if (!pClient) {
+      lastError = "Failed to create BLE client";
       LOG_ERR("BT", "Failed to create BLE client");
       return false;
     }
+
+    // Keep client lifetime under manager control so disconnect callbacks do not free it in NimBLE context.
+    pClient->setSelfDelete(false, false);
     
     // Set connection callbacks
     static ClientCallbacks clientCallbacks;
     pClient->setClientCallbacks(&clientCallbacks);
     
     // Connect to device
-    // In NimBLE 2.x, NimBLEAddress needs a type parameter (default is PUBLIC)
-    NimBLEAddress bleAddress(address, BLE_ADDR_PUBLIC);
     if (!pClient->connect(bleAddress)) {
       lastError = "Connection failed";
       LOG_ERR("BT", "Failed to connect to %s", address.c_str());
-      NimBLEDevice::deleteClient(pClient);
       return false;
     }
-    
-    LOG_INF("BT", "Connected, discovering services...");
     
     // Get HID service
     NimBLERemoteService* pService = pClient->getService(HID_SERVICE_UUID);
@@ -288,7 +334,6 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
       lastError = "HID service not found";
       LOG_ERR("BT", "Device %s doesn't have HID service", address.c_str());
       pClient->disconnect();
-      NimBLEDevice::deleteClient(pClient);
       return false;
     }
     
@@ -311,9 +356,6 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
       
       if (pChar->getUUID().equals(NimBLEUUID(HID_REPORT_UUID))) {
         reportCount++;
-        LOG_INF("BT", "Found Report char #%d, notify:%d indicate:%d UUID:%s", 
-                reportCount, pChar->canNotify(), pChar->canIndicate(),
-                pChar->getUUID().toString().c_str());
         
         // Check if this report supports notify or indicate (input report)
         if (pChar->canNotify() || pChar->canIndicate()) {
@@ -335,7 +377,6 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
     
     for (size_t i = 0; i < reportChars.size(); i++) {
       auto* pChar = reportChars[i];
-      LOG_INF("BT", "Subscribing to Report char #%d...", i + 1);
       
       // Subscribe with callback
       bool subResult = pChar->subscribe(true, onHIDNotify);
@@ -353,6 +394,7 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
     connDev.address = address;
     connDev.client = pClient;
     connDev.reportChars = reportChars;
+    connDev.connectedTime = millis();
     connDev.subscribed = true;
     connDev.lastActivityTime = millis();  // Initialize activity timer
     connDev.wasConnected = true;  // Mark for auto-reconnect if disconnected
@@ -375,6 +417,15 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
     
     // Always attempt profile matching by MAC address (and name if available)
     connDev.profile = DeviceProfiles::findDeviceProfile(address.c_str(), connDev.name.c_str());
+
+    if (!connDev.profile) {
+      // Apply learned profile for unknown devices so learned report-byte index is honored.
+      if (const auto* customProfile = DeviceProfiles::getCustomProfile()) {
+        connDev.profile = customProfile;
+        LOG_INF("BT", "Using learned profile for unknown device: idx=%u",
+                static_cast<unsigned>(customProfile->reportByteIndex));
+      }
+    }
     
     if (connDev.profile) {
       LOG_INF("BT", "✓ Using device profile: %s (byte[%d] for keycode)", 
@@ -407,19 +458,20 @@ bool BluetoothHIDManager::disconnectFromDevice(const std::string& address) {
     [&address](const ConnectedDevice& dev) { return dev.address == address; });
   
   if (it != _connectedDevices.end()) {
-    // Just disconnect - don't delete the client as NimBLE manages it
-    // and the disconnect callback will be called
-    if (it->client && it->client->isConnected()) {
+    NimBLEClient* client = it->client;
+
+    // Ensure normal CPU speed during BLE termination to avoid WDT in low-power mode.
+    if (client && client->isConnected()) {
       try {
-        LOG_DBG("BT", "Calling disconnect on client...");
-        it->client->disconnect();
+        HalPowerManager::Lock lock;
+        client->disconnect();
       } catch (const std::exception& e) {
         LOG_ERR("BT", "Error during disconnect: %s", e.what());
       } catch (...) {
         LOG_ERR("BT", "Unknown error during disconnect");
       }
     }
-    
+
     // Remove from our list
     _connectedDevices.erase(it);
     LOG_INF("BT", "Disconnected from %s", address.c_str());
@@ -463,9 +515,20 @@ void BluetoothHIDManager::setInputCallback(std::function<void(uint16_t)> callbac
   LOG_DBG("BT", "Input callback registered");
 }
 
+void BluetoothHIDManager::setLearnInputCallback(std::function<void(uint8_t, uint8_t)> callback) {
+  _learnInputCallback = callback;
+  LOG_DBG("BT", "Learn input callback registered");
+}
+
 void BluetoothHIDManager::setButtonInjector(std::function<void(uint8_t)> injector) {
   _buttonInjector = injector;
   LOG_DBG("BT", "Button injector registered");
+}
+
+void BluetoothHIDManager::setBondedDevice(const std::string& address, const std::string& name) {
+  _bondedDeviceAddress = address;
+  _bondedDeviceName = name;
+  LOG_INF("BT", "Bonded device set: %s (%s)", _bondedDeviceAddress.c_str(), _bondedDeviceName.c_str());
 }
 
 bool BluetoothHIDManager::hasRecentActivity() const {
@@ -487,14 +550,6 @@ bool BluetoothHIDManager::hasRecentActivity() const {
 void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
   if (!g_instance || !pData || length == 0) return;
   
-  // Log raw data for debugging
-  char hexStr[128] = {0};
-  int offset = 0;
-  for (size_t i = 0; i < length && i < 16; i++) {
-    offset += snprintf(hexStr + offset, sizeof(hexStr) - offset, "%02X ", pData[i]);
-  }
-  LOG_DBG("BT", "HID Report (%d bytes): %s", length, hexStr);
-  
   // Get the device address and find the connected device
   ConnectedDevice* device = nullptr;
   if (pChar && pChar->getRemoteService()) {
@@ -512,6 +567,7 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   
   // Extract keycode based on device profile or auto-detect
   uint8_t keycode = 0xFF;
+  uint8_t keycodeIndex = 0xFF;
   bool isPressed = false;
   
   if (length < 2) {
@@ -524,13 +580,38 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
     // Use device profile's byte index for keycode
     if (length >= device->profile->reportByteIndex + 1) {
       keycode = pData[device->profile->reportByteIndex];
+      keycodeIndex = device->profile->reportByteIndex;
     }
     
     // For Game Brick: press state from byte[0] bit 0
     // For standard HID keyboards: press state from keycode (non-zero = pressed)
     if (strcmp(device->profile->name, "IINE Game Brick") == 0) {
+      // Game Brick: accept only stable digital-button report family (0x1x).
+      // Ignore noisy transitional frames (commonly 0x2x/0x3x) that can trigger false presses.
+      const bool stableButtonReport = (pData[0] & 0xF0) == 0x10;
+      if (!stableButtonReport) {
+        LOG_DBG("BT", "Game Brick: ignoring transitional report byte[0]=0x%02X, keycode=0x%02X", pData[0], keycode);
+        device->lastButtonState = false;
+        device->lastHIDKeycode = 0x00;
+        return;
+      }
+
       // Game Brick: byte[0] LSB indicates press state
       isPressed = (pData[0] & 0x01) != 0;
+
+      // Prevent initial stale pressed frame right after subscribe from triggering navigation.
+      // Only allow presses after at least one clean release frame has been seen.
+      if (!device->hasSeenRelease) {
+        if (!isPressed) {
+          device->hasSeenRelease = true;
+        } else {
+          LOG_DBG("BT", "Game Brick: ignoring startup pressed frame keycode=0x%02X", keycode);
+          device->lastButtonState = true;
+          device->lastHIDKeycode = keycode;
+          return;
+        }
+      }
+
       LOG_DBG("BT", "Game Brick: byte[0]=0x%02X, keycode=0x%02X, pressed=%d", pData[0], keycode, isPressed);
     } else {
       // Standard HID keyboards: keycode presence indicates press
@@ -539,33 +620,25 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
       LOG_DBG("BT", "Device %s: keycode=0x%02X, pressed=%d", device->profile->name, keycode, isPressed);
     }
   } else {
-    // Auto-detect mode: try to intelligently detect report format
-    // Priority 1: Check for GameBrick-style codes in byte[4] (A/B buttons 0x07, 0x09)
-    if (length >= 5) {
-      uint8_t byte4 = pData[4];
-      // If we see GameBrick button codes (0x07 or 0x09), use GameBrick format
-      if (byte4 == 0x07 || byte4 == 0x09) {
-        keycode = byte4;
-        isPressed = (pData[0] & 0x01) != 0;
-        LOG_DBG("BT", "Auto-detect (GameBrick codes detected): byte[4]=0x%02X, pressed=%d", keycode, isPressed);
-      } else if (byte4 == 0x00 && (pData[0] & 0x01)) {
-        // Button pressed (byte[0] bit set) but byte[4] is zero - might be in transition
-        // Fall through to standard keyboard check
-        keycode = length > 2 ? pData[2] : 0x00;
-        isPressed = (keycode != 0x00);
-        LOG_DBG("BT", "Auto-detect (standard keyboard): keycode=0x%02X, pressed=%d", keycode, isPressed);
-      } else {
-        // No GameBrick codes in byte[4], try standard keyboard byte[2]
-        keycode = length > 2 ? pData[2] : 0x00;
-        isPressed = (keycode != 0x00);
-        LOG_DBG("BT", "Auto-detect (standard keyboard): keycode=0x%02X, pressed=%d", keycode, isPressed);
-      }
+    // Auto-detect mode: support a wider range of generic HID remotes.
+    const ExtractedHIDKey extracted = extractGenericPageTurnKeycode(pData, length);
+    keycode = extracted.keycode;
+    keycodeIndex = extracted.reportIndex;
+
+    // Keep existing GameBrick bit0 press-state behavior when applicable.
+    if (length >= 5 && (keycode == 0x07 || keycode == 0x09)) {
+      isPressed = ((pData[0] & 0x01) != 0) || (keycode != 0x00);
+      LOG_DBG("BT", "Auto-detect (GameBrick-like): keycode=0x%02X, pressed=%d", keycode, isPressed);
     } else {
-      // Report too short for GameBrick, use standard keyboard format
-      keycode = length > 2 ? pData[2] : 0x00;
       isPressed = (keycode != 0x00);
-      LOG_DBG("BT", "Auto-detect (standard keyboard): keycode=0x%02X, pressed=%d", keycode, isPressed);
+      LOG_DBG("BT", "Auto-detect (generic HID): keycode=0x%02X, pressed=%d", keycode, isPressed);
     }
+  }
+
+  // Update release state for startup noise gate
+  // When we see the first release (isPressed = false), we enable button injection
+  if (!isPressed && !device->hasSeenRelease) {
+    device->hasSeenRelease = true;
   }
   
   // Ignore if no valid keycode detected
@@ -576,9 +649,23 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
     return;
   }
   
-  // Detect button PRESS transition: keycode appeared (not was before)
-  if (isPressed && !device->lastButtonState) {
+  // CRITICAL GATE: Don't inject any buttons until we've seen the first release
+  // This prevents startup transient noise from being interpreted as button presses
+  if (!device->hasSeenRelease) {
+    device->lastButtonState = isPressed;
+    device->lastHIDKeycode = keycode;
+    return;
+  }
+
+  // Detect button PRESS transition: new press or changed key while still pressed.
+  // Some remotes keep pressed-state high while changing keycode; treat key change as a new event.
+  const bool isNewPressEvent = isPressed && (!device->lastButtonState || keycode != device->lastHIDKeycode);
+  if (isNewPressEvent) {
     LOG_INF("BT", ">>> BUTTON PRESSED: keycode=0x%02X <<<", keycode);
+
+    if (g_instance->_learnInputCallback && keycode != 0x00 && keycode != 0xFF && keycodeIndex != 0xFF) {
+      g_instance->_learnInputCallback(keycode, keycodeIndex);
+    }
     
     // Try to map to button and inject with cooldown
     if (g_instance->_buttonInjector) {
@@ -586,14 +673,13 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
       if (btn != 0xFF) {
         // Add 150ms cooldown between button injections to prevent flooding
         unsigned long now = millis();
-        if (now - device->lastInjectionTime >= 150) {
+        if ((now - device->lastInjectionTime >= 150) || (keycode != device->lastInjectedKeycode)) {
           String buttonName = (btn == HalGPIO::BTN_DOWN) ? "PageForward" : "PageBack";
           LOG_INF("BT", "Mapped key 0x%02X -> %s", keycode, buttonName.c_str());
           LOG_DBG("BT", "Injecting button: %d", btn);
           g_instance->_buttonInjector(btn);
           device->lastInjectionTime = now;
-        } else {
-          LOG_DBG("BT", "Button injection throttled (cooldown: %u ms)", now - device->lastInjectionTime);
+          device->lastInjectedKeycode = keycode;
         }
       }
     }
@@ -640,6 +726,18 @@ uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, const DevicePro
   if (keycode != 0x00) {
     LOG_DBG("BT", "mapKeycodeToButton() called with keycode: 0x%02X", keycode);
   }
+
+  // Always honor learned keys first so users can override defaults for any remote.
+  if (const auto* customProfile = DeviceProfiles::getCustomProfile()) {
+    if (keycode == customProfile->pageUpCode) {
+      LOG_INF("BT", "Mapped learned key 0x%02X -> PageBack", keycode);
+      return HalGPIO::BTN_UP;
+    }
+    if (keycode == customProfile->pageDownCode) {
+      LOG_INF("BT", "Mapped learned key 0x%02X -> PageForward", keycode);
+      return HalGPIO::BTN_DOWN;
+    }
+  }
   
   // If we have a device profile, ONLY map keycodes specific to that profile
   if (profile) {
@@ -656,24 +754,25 @@ uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, const DevicePro
       return 0xFF;
     }
   }
-  
-  // No profile - fall back to generic HID consumer codes only
-  switch (keycode) {
-    case 0xE9:   // Consumer Page Up
-      LOG_INF("BT", "Mapped key 0xE9 (Consumer PageUp) -> PageForward");
+
+  // No profile match - use broad common-key mapping for generic remotes/keyboards.
+  bool pageForward = false;
+  if (DeviceProfiles::mapCommonCodeToDirection(keycode, pageForward)) {
+    if (pageForward) {
+      LOG_INF("BT", "Mapped generic key 0x%02X -> PageForward", keycode);
       return HalGPIO::BTN_DOWN;
-    case 0xEA:   // Consumer Page Down
-      LOG_INF("BT", "Mapped key 0xEA (Consumer PageDown) -> PageBack");
-      return HalGPIO::BTN_UP;
-    
-    case 0x00:   // Key release/idle
-      return 0xFF;
-    
-    default:
-      // Ignore all other keycodes without a profile
-      LOG_DBG("BT", "Unmapped keycode: 0x%02X (no profile)", keycode);
-      return 0xFF;
+    }
+    LOG_INF("BT", "Mapped generic key 0x%02X -> PageBack", keycode);
+    return HalGPIO::BTN_UP;
   }
+
+  if (keycode == 0x00) {
+    return 0xFF;
+  }
+
+  // Unknown key for generic device; ignore safely.
+  LOG_DBG("BT", "Unmapped keycode: 0x%02X (no profile)", keycode);
+  return 0xFF;
 }
 
 void BluetoothHIDManager::updateActivity() {
@@ -683,24 +782,36 @@ void BluetoothHIDManager::updateActivity() {
     return;
   }
   lastMaintenanceCheck = now;
-  
-  // Check for inactive connections
-  for (auto& device : _connectedDevices) {
-    if (device.lastActivityTime > 0) {
-      unsigned long inactiveTime = now - device.lastActivityTime;
-      if (inactiveTime > INACTIVITY_TIMEOUT_MS) {
-        LOG_INF("BT", "Device %s inactive for %lu ms, disconnecting", device.address.c_str(), inactiveTime);
-        disconnectFromDevice(device.address);
-        break;  // List modified, exit loop
-      }
+
+  // Check for one inactive connection and disconnect it in-place.
+  std::string inactiveAddress;
+  unsigned long inactiveTimeMs = 0;
+  for (const auto& device : _connectedDevices) {
+    if (device.lastActivityTime == 0) {
+      continue;
     }
+
+    unsigned long inactiveTime = now - device.lastActivityTime;
+    if (inactiveTime > INACTIVITY_TIMEOUT_MS) {
+      inactiveAddress = device.address;
+      inactiveTimeMs = inactiveTime;
+      break;
+    }
+  }
+
+  if (!inactiveAddress.empty()) {
+    LOG_INF("BT", "Device %s inactive for %lu ms, disconnecting", inactiveAddress.c_str(), inactiveTimeMs);
+    disconnectFromDevice(inactiveAddress);
   }
 }
 
-void BluetoothHIDManager::checkAutoReconnect() {
-  // Check for devices that were previously connected but are now disconnected
-  // Attempt to reconnect to them automatically
+void BluetoothHIDManager::checkAutoReconnect(bool userInputDetected) {
+  if (!_enabled) {
+    return;
+  }
+
   static unsigned long lastReconnectCheck = 0;
+  static unsigned long lastReconnectAttempt = 0;
   unsigned long now = millis();
   
   // Only check every 5 seconds to avoid hammering
@@ -708,27 +819,48 @@ void BluetoothHIDManager::checkAutoReconnect() {
     return;
   }
   lastReconnectCheck = now;
-  
-  // Look for devices that should be auto-reconnected
-  for (auto& device : _connectedDevices) {
-    if (device.wasConnected && device.client) {
-      // Check if client is still connected
-      if (!device.client->isConnected()) {
-        LOG_INF("BT", "Device %s was disconnected, attempting auto-reconnect...", device.address.c_str());
-        
-        // Remove from list and reconnect
-        std::string addr = device.address;
-        disconnectFromDevice(addr);
-        
-        // Attempt reconnection
-        if (connectToDevice(addr)) {
-          LOG_INF("BT", "Auto-reconnected to %s", addr.c_str());
-        } else {
-          LOG_ERR("BT", "Auto-reconnect to %s failed: %s", addr.c_str(), lastError.c_str());
-        }
-        break;  // Only reconnect one device per check
-      }
+
+  // Remove stale disconnected clients from active list.
+  for (auto it = _connectedDevices.begin(); it != _connectedDevices.end();) {
+    if (!it->client || !it->client->isConnected()) {
+      LOG_DBG("BT", "Pruning stale disconnected client entry: %s client=%p", it->address.c_str(), it->client);
+      it = _connectedDevices.erase(it);
+    } else {
+      ++it;
     }
+  }
+
+  // Already connected.
+  if (!_connectedDevices.empty()) {
+    LOG_DBG("BT", "AutoReconnect skipped: already connected");
+    return;
+  }
+
+  // Reconnect is user-driven while reading: require a local button event.
+  if (!userInputDetected) {
+    LOG_DBG("BT", "AutoReconnect skipped: no local user input");
+    return;
+  }
+
+  // Avoid reconnect storms.
+  if (now - lastReconnectAttempt < 2000) {
+    LOG_DBG("BT", "AutoReconnect skipped: cooldown active (%lu ms)", now - lastReconnectAttempt);
+    return;
+  }
+  lastReconnectAttempt = now;
+
+  if (_bondedDeviceAddress.empty()) {
+    LOG_DBG("BT", "AutoReconnect skipped: no bonded device configured");
+    return;
+  }
+
+  LOG_INF("BT", "Button activity detected while disconnected, reconnecting to bonded device %s",
+          _bondedDeviceAddress.c_str());
+
+  if (connectToDevice(_bondedDeviceAddress)) {
+    LOG_INF("BT", "Reconnected to bonded device %s", _bondedDeviceAddress.c_str());
+  } else {
+    LOG_ERR("BT", "Reconnect to bonded device %s failed: %s", _bondedDeviceAddress.c_str(), lastError.c_str());
   }
 }
 
