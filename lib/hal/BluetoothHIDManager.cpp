@@ -298,6 +298,7 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
 
     // Reuse existing disconnected client objects to avoid NimBLE deleteClient() on this target.
     NimBLEClient* pClient = NimBLEDevice::getClientByPeerAddress(bleAddress);
+    const bool hadExistingClient = (pClient != nullptr);
     if (!pClient) {
       pClient = NimBLEDevice::getDisconnectedClient();
       if (pClient) {
@@ -316,6 +317,10 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
 
     // Keep client lifetime under manager control so disconnect callbacks do not free it in NimBLE context.
     pClient->setSelfDelete(false, false);
+
+    if (!pClient->isConnected()) {
+      pClient->deleteServices();
+    }
     
     // Set connection callbacks
     static ClientCallbacks clientCallbacks;
@@ -323,9 +328,21 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
     
     // Connect to device
     if (!pClient->connect(bleAddress)) {
-      lastError = "Connection failed";
-      LOG_ERR("BT", "Failed to connect to %s", address.c_str());
-      return false;
+      if (hadExistingClient) {
+        LOG_INF("BT", "Reconnect with existing client failed for %s, retrying with fresh client", address.c_str());
+        NimBLEClient* freshClient = NimBLEDevice::createClient(bleAddress);
+        if (freshClient) {
+          pClient = freshClient;
+          pClient->setSelfDelete(false, false);
+          pClient->setClientCallbacks(&clientCallbacks);
+        }
+      }
+
+      if (!pClient->connect(bleAddress)) {
+        lastError = "Connection failed";
+        LOG_ERR("BT", "Failed to connect to %s", address.c_str());
+        return false;
+      }
     }
     
     // Get HID service
@@ -374,6 +391,7 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
     
     // Subscribe to ALL Report characteristics with notify capability
     LOG_INF("BT", "Subscribing to %d Report characteristics...", reportChars.size());
+    size_t successfulSubscriptions = 0;
     
     for (size_t i = 0; i < reportChars.size(); i++) {
       auto* pChar = reportChars[i];
@@ -381,13 +399,24 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
       // Subscribe with callback
       bool subResult = pChar->subscribe(true, onHIDNotify);
       LOG_INF("BT", "Report char #%d subscribe result: %d", i + 1, subResult);
+      if (subResult) {
+        successfulSubscriptions++;
+      }
       
       if (!subResult) {
         LOG_INF("BT", "Failed to subscribe to Report char #%d (continuing)", i + 1);
       }
     }
+
+    if (successfulSubscriptions == 0) {
+      lastError = "Failed to subscribe to input reports";
+      LOG_ERR("BT", "No HID report subscriptions succeeded for %s", address.c_str());
+      pClient->disconnect();
+      return false;
+    }
     
-    LOG_INF("BT", "Subscribed to %d HID Report characteristics", reportChars.size());
+    LOG_INF("BT", "Subscribed to %u/%u HID Report characteristics",
+            static_cast<unsigned>(successfulSubscriptions), static_cast<unsigned>(reportChars.size()));
     
     // Save connection with activity timestamp
     ConnectedDevice connDev;
@@ -434,7 +463,13 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
       LOG_INF("BT", "No known profile matched for %s, will auto-detect from HID codes", address.c_str());
     }
     
-    _connectedDevices.push_back(connDev);
+    auto existing = std::find_if(_connectedDevices.begin(), _connectedDevices.end(),
+                                 [&address](const ConnectedDevice& dev) { return dev.address == address; });
+    if (existing != _connectedDevices.end()) {
+      *existing = connDev;
+    } else {
+      _connectedDevices.push_back(connDev);
+    }
     
     LOG_INF("BT", "Successfully connected to %s", address.c_str());
     lastError = "Connected";
@@ -486,14 +521,17 @@ bool BluetoothHIDManager::disconnectFromDevice(const std::string& address) {
 }
 
 bool BluetoothHIDManager::isConnected(const std::string& address) const {
-  return std::find_if(_connectedDevices.begin(), _connectedDevices.end(),
-    [&address](const ConnectedDevice& dev) { return dev.address == address; }) != _connectedDevices.end();
+  return std::find_if(_connectedDevices.begin(), _connectedDevices.end(), [&address](const ConnectedDevice& dev) {
+           return dev.address == address && dev.client && dev.client->isConnected();
+         }) != _connectedDevices.end();
 }
 
 std::vector<std::string> BluetoothHIDManager::getConnectedDevices() const {
   std::vector<std::string> addresses;
   for (const auto& dev : _connectedDevices) {
-    addresses.push_back(dev.address);
+    if (dev.client && dev.client->isConnected()) {
+      addresses.push_back(dev.address);
+    }
   }
   return addresses;
 }

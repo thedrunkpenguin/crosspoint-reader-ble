@@ -109,11 +109,13 @@ void BluetoothSettingsActivity::loop() {
 }
 
 void BluetoothSettingsActivity::handleMainMenuInput() {
+  constexpr int kMainMenuItemCount = 7;
+
   if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
-    selectedIndex = (selectedIndex > 0) ? selectedIndex - 1 : 5;
+    selectedIndex = (selectedIndex > 0) ? selectedIndex - 1 : (kMainMenuItemCount - 1);
     requestUpdate();
   } else if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
-    selectedIndex = (selectedIndex < 5) ? selectedIndex + 1 : 0;
+    selectedIndex = (selectedIndex < (kMainMenuItemCount - 1)) ? selectedIndex + 1 : 0;
     requestUpdate();
   }
   
@@ -177,6 +179,22 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
       }
       requestUpdate();
     } else if (selectedIndex == 2) {
+      if (!btMgr->isEnabled()) {
+        lastError = "Enable BT first";
+      } else {
+        const auto& connectedDevices = btMgr->getConnectedDevices();
+        if (connectedDevices.empty()) {
+          lastError = "No devices connected";
+        } else {
+          std::vector<std::string> deviceAddresses = connectedDevices;
+          for (const auto& addr : deviceAddresses) {
+            btMgr->disconnectFromDevice(addr);
+          }
+          lastError = "Disconnected";
+        }
+      }
+      requestUpdate();
+    } else if (selectedIndex == 3) {
       // Start scan and switch to device list
       if (btMgr->isEnabled()) {
         btMgr->startScan(10000);
@@ -188,7 +206,7 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
         lastError = "Enable BT first";
       }
       requestUpdate();
-    } else if (selectedIndex == 3) {
+    } else if (selectedIndex == 4) {
       if (!btMgr->isEnabled()) {
         lastError = "Enable BT first";
       } else if (btMgr->getConnectedDevices().empty()) {
@@ -210,11 +228,11 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
         lastError = "Press PREVIOUS PAGE button";
       }
       requestUpdate();
-    } else if (selectedIndex == 4) {
+    } else if (selectedIndex == 5) {
       DeviceProfiles::clearCustomProfile();
       lastError = "Learned mapping cleared";
       requestUpdate();
-    } else if (selectedIndex == 5) {
+    } else if (selectedIndex == 6) {
       SETTINGS.bleBondedDeviceAddr[0] = '\0';
       SETTINGS.bleBondedDeviceName[0] = '\0';
       SETTINGS.bleBondedDeviceAddrType = 0;
@@ -443,6 +461,7 @@ void BluetoothSettingsActivity::renderMainMenu() {
   const char* items[] = {
     btMgr && btMgr->isEnabled() ? "Disable Bluetooth" : "Enable Bluetooth",
     "Reconnect Bonded Remote",
+    "Disconnect Device(s)",
     "Scan for Devices",
     "Learn Page-Turn Keys",
     "Clear Learned Keys",
@@ -450,7 +469,7 @@ void BluetoothSettingsActivity::renderMainMenu() {
   };
 
   std::vector<std::string> itemLabels;
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < 7; i++) {
     itemLabels.push_back(items[i]);
   }
 
@@ -461,7 +480,7 @@ void BluetoothSettingsActivity::renderMainMenu() {
            pageWidth,
            pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.buttonHintsHeight +
                          metrics.verticalSpacing * 2 + listOffsetY)},
-      6, selectedIndex,
+      7, selectedIndex,
       [&itemLabels](int index) { return itemLabels[index]; }, nullptr, nullptr,
       [this](int i) {
         if (i == 0) {

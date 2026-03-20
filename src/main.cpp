@@ -472,8 +472,10 @@ void loop() {
     }
   }
 
-  // Check for any user activity (button press or release) or active background work
+  // Track general activity for responsiveness/power and a separate timer for
+  // auto-sleep countdown.
   static unsigned long lastActivityTime = millis();
+  static unsigned long lastSleepActivityTime = millis();
   
   // Check for physical button presses, virtual button presses, or activity prevention
   bool hasActivity = userInputDetected || 
@@ -485,8 +487,16 @@ void loop() {
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }
 
+  // Auto-sleep countdown intentionally ignores BLE keepalive activity.
+  // It should reset only on local input or when an activity explicitly
+  // requests auto-sleep prevention.
+  const bool hasSleepActivity = userInputDetected || (currentActivity && currentActivity->preventAutoSleep());
+  if (hasSleepActivity) {
+    lastSleepActivityTime = millis();
+  }
+
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
-  if (millis() - lastActivityTime >= sleepTimeoutMs) {
+  if (millis() - lastSleepActivityTime >= sleepTimeoutMs) {
     LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);
     enterDeepSleep();
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
