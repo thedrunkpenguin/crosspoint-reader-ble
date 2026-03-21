@@ -11,7 +11,45 @@ fully-featured, open-source replacement firmware with additional quality-of-life
 
 ## Release Highlights
 
-### v1.1.1.1-ble (latest)
+### v1.1.1.3-ble (latest)
+
+Improved BLE key learning for unknown and generic devices — addresses the common case where a user could
+learn the **Previous** button but the **Next** button failed to save:
+
+- **Learn Keys no longer rejects mismatched byte positions.** Previously if your remote's Prev and Next
+  buttons sent their keycodes at different offsets inside the HID report the firmware would display
+  `"NEXT key must use byte[X]"` and block the save. This check has been removed — any two different
+  keycodes are now accepted, making the learn flow reliable for a much wider range of hardware.
+- **Custom profiles now scan the full HID report.** After learning, when a notification arrives the
+  firmware searches all 8 bytes of the report for your learned codes instead of only looking at the
+  single fixed byte captured during learning. This handles remotes that send Prev/Next on separate
+  HID characteristics or with variable-length frames.
+- **User-learned profile takes priority over fuzzy name matches.** If you have gone through Learn Keys,
+  your mapping wins over any automatic name-based profile guess (e.g. a device called "Mini Remote"
+  no longer silently falls back to the built-in MINI_KEYBOARD codes). MAC-address matches and the
+  GameBrick strict profile still take precedence.
+- **Custom profile fallback in key mapping.** Even when a non-strict built-in profile is active, if
+  a keycode does not match that profile's expected codes the firmware also checks your learned mapping.
+  This makes hybrid devices — where one button matches a known profile and the other does not — work
+  without needing to clear the built-in profile first.
+- **GameBrick protected from accidental override.** The GameBrick uses a non-standard bitmask report
+  layout and is now marked `strictProfile`, so it is never replaced by a user-learned mapping.
+- **1-byte Consumer Control reports now processed.** Short HID frames such as `[0xE9]` or `[0xEA]`
+  (common on presentation clickers) are no longer dropped by the minimum-length check.
+- **Added "Disconnect Device(s)"** option to Settings → Bluetooth main menu for a quick manual
+  disconnect without leaving the settings screen.
+- **Bluetooth reconnect reliability improvements.** Stale connected-device entries are now detected
+  via a live `client->isConnected()` check, preventing a device appearing connected when it is not.
+  Subscribe failures during reconnect are detected and retried with a fresh client object.
+- **Auto-sleep uses a dedicated timer** that is not reset by BLE keepalive traffic, so the device
+  sleeps after the configured idle period even when a Bluetooth remote is actively paired.
+
+### v1.1.1.2-ble
+
+- Version string corrected to match the release tag.
+- Baseline stability from v1.1.1.1-ble preserved.
+
+### v1.1.1.1-ble
 
 - Fixes a BLE input bug where long-press usage could unintentionally update learned key mappings.
 - Learned BLE mappings are now only captured in **Settings → Bluetooth → Learn Page-Turn Keys**.
@@ -109,13 +147,14 @@ See [the user guide](./USER_GUIDE.md) for full instructions. For project scope, 
 If your remote is not recognised out of the box, you can teach the firmware which buttons to use:
 
 1. Go to **Settings → Bluetooth → Learn Page-Turn Keys**.
-2. Press the button you want to use as **Previous page** — the display will confirm it was captured (e.g. `Prev=0x4B @byte[2]`).
-3. Press the button you want to use as **Next page**.
-4. The mapping is saved to the SD card (`.crosspoint/ble_custom_profile.txt`) and applied automatically on future connections.
+2. Press the button you want to use as **Previous page** — the display confirms with e.g. `Prev=0x4B`.
+3. Press a **different** button for **Next page** — the display shows `Saved! Prev=0xXX Next=0xXX`.
+4. The mapping is written to the SD card (`.crosspoint/ble_custom_profile.txt`) and applied automatically
+   on all future connections.
 
-> **Note:** The firmware records which byte of the HID report the keycode comes from, so it works correctly
-> even for non-standard devices. If your Prev and Next buttons appear to come from different report byte positions,
-> the UI will warn you and ask you to retry with a consistent button pair.
+> **Tip:** If only one direction works after learning, go to **Settings → Bluetooth → Clear Learned Keys**
+> and repeat the process. The byte-position mismatch restriction that blocked many generic remotes in
+> earlier versions has been removed in v1.1.1.3.
 
 ### Known Device Profiles
 
@@ -128,9 +167,17 @@ If your remote is not recognised out of the box, you can teach the firmware whic
 
 - Per-button cooldown logic prevents rapid accidental repeated presses.
 - BLE client objects are **reused rather than deleted** to avoid a heap assertion on this ESP32-C3 target
-  (`NimBLEDevice::deleteClient()` triggers a `heap_caps_free` failure on NimBLE-Arduino 2.3.6 and was removed entirely).
-- The custom profile is stored as plain text `upKeycode,downKeycode,reportByteIndex` and is backward-compatible
-  with the two-field format from earlier firmware versions.
+  (`NimBLEDevice::deleteClient()` triggers a `heap_caps_free` failure on NimBLE-Arduino 2.3.6).
+- The custom profile is stored as plain text `upKeycode,downKeycode,reportByteIndex` on the SD card
+  and is backward-compatible with the two-field format from earlier firmware versions.
+- Device profile priority (highest to lowest): ① MAC-address prefix match → ② User-learned custom
+  profile (for non-strict profiles) → ③ Fuzzy device-name match.
+- The **GameBrick** profile is `strictProfile` — its non-standard bitmask/byte[4] report layout is
+  protected from being silently overridden by a user-learned custom mapping.
+- Custom profile matching scans all 8 report bytes for learned codes, so Prev/Next buttons that
+  transmit their keycodes at different byte offsets or on separate HID characteristics both work.
+- `isConnected()` and `getConnectedDevices()` verify that the link is actually live via
+  `client->isConnected()`, preventing stale entries from blocking reconnect attempts.
 
 ---
 
