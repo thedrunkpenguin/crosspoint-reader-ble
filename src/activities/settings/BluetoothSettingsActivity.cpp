@@ -270,14 +270,9 @@ void BluetoothSettingsActivity::handleLearnInput() {
         return;
       }
 
-      if (capturedIndex != 0xFF && capturedIndex != learnedReportIndex) {
-        char buf[96];
-        snprintf(buf, sizeof(buf), "NEXT key must use byte[%u]", static_cast<unsigned>(learnedReportIndex));
-        lastError = buf;
-        requestUpdate();
-        return;
-      }
-
+      // Accept next key regardless of which byte it came from.
+      // The custom profile uses full-report scanning so the byte index is advisory only.
+      // (Previously this rejected keys from a different byte, blocking many generic remotes.)
       learnedNextKey = capturedKey;
       DeviceProfiles::setCustomProfile(learnedPrevKey, learnedNextKey, learnedReportIndex);
       if (btMgr) {
@@ -285,8 +280,7 @@ void BluetoothSettingsActivity::handleLearnInput() {
       }
       learnStep = LearnStep::DONE;
       char buf[96];
-      snprintf(buf, sizeof(buf), "Saved Prev=0x%02X Next=0x%02X @byte[%u]", learnedPrevKey, learnedNextKey,
-               static_cast<unsigned>(learnedReportIndex));
+      snprintf(buf, sizeof(buf), "Saved! Prev=0x%02X Next=0x%02X", learnedPrevKey, learnedNextKey);
       lastError = buf;
       requestUpdate();
       return;

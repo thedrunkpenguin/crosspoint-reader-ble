@@ -8,7 +8,7 @@
 namespace {
 constexpr const char* CUSTOM_PROFILE_FILE = "/.crosspoint/ble_custom_profile.txt";
 
-DeviceProfiles::DeviceProfile customProfile = {"Custom BLE Remote", nullptr, 0x00, 0x00, false, 2};
+DeviceProfiles::DeviceProfile customProfile = {"Custom BLE Remote", nullptr, 0x00, 0x00, false, 2, false};
 bool customProfileLoaded = false;
 
 void loadCustomProfileFromStorage() {

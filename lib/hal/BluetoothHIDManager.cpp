@@ -444,15 +444,33 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
       LOG_INF("BT", "Device not in scan results (may be previously paired): %s", address.c_str());
     }
     
-    // Always attempt profile matching by MAC address (and name if available)
-    connDev.profile = DeviceProfiles::findDeviceProfile(address.c_str(), connDev.name.c_str());
+    // Profile matching priority:
+    //  1. MAC-prefix exact match  (hardware ID, precise – always wins)
+    //  2. User-learned custom profile (explicitly taught by the user)
+    //     → only if the name-matched known profile is NOT marked strictProfile
+    //  3. Fuzzy name-pattern match  (last resort – can produce false positives)
+    connDev.profile = DeviceProfiles::findDeviceProfile(address.c_str(), nullptr);
 
     if (!connDev.profile) {
-      // Apply learned profile for unknown devices so learned report-byte index is honored.
-      if (const auto* customProfile = DeviceProfiles::getCustomProfile()) {
+      // Check if a name-matched profile exists and whether it is strict.
+      const DeviceProfiles::DeviceProfile* nameMatch =
+          DeviceProfiles::findDeviceProfile(nullptr, connDev.name.c_str());
+      const bool nameMatchIsStrict = nameMatch && nameMatch->strictProfile;
+
+      // Prefer the user's learned mapping over a non-strict name-based guess.
+      const auto* customProfile = DeviceProfiles::getCustomProfile();
+      if (customProfile && !nameMatchIsStrict) {
         connDev.profile = customProfile;
-        LOG_INF("BT", "Using learned profile for unknown device: idx=%u",
-                static_cast<unsigned>(customProfile->reportByteIndex));
+        LOG_INF("BT", "Using learned custom profile (overrides non-strict name match): up=0x%02X dn=0x%02X",
+                customProfile->pageUpCode, customProfile->pageDownCode);
+      } else if (nameMatch) {
+        connDev.profile = nameMatch;
+        if (nameMatchIsStrict) {
+          LOG_INF("BT", "Using strict name-matched profile '%s' (custom profile bypassed)",
+                  nameMatch->name);
+        } else {
+          LOG_INF("BT", "Using name-matched profile '%s' (no custom profile set)", nameMatch->name);
+        }
       }
     }
     
@@ -618,8 +636,8 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   uint8_t keycodeIndex = 0xFF;
   bool isPressed = false;
   
-  if (length < 2) {
-    LOG_DBG("BT", "HID report too short (%d bytes)", length);
+  if (length < 1) {
+    LOG_DBG("BT", "HID report empty, ignoring");
     return;
   }
   
@@ -630,7 +648,28 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
       keycode = pData[device->profile->reportByteIndex];
       keycodeIndex = device->profile->reportByteIndex;
     }
-    
+
+    // For custom/learned profiles: if the fixed-index byte is not one of the learned
+    // keycodes, scan the entire report.  This handles remotes where the prev/next buttons
+    // send their keycodes at different byte positions, or where they arrive on separate
+    // HID report characteristics with their own frame layouts.
+    const bool isCustomProfile = (strcmp(device->profile->name, "Custom BLE Remote") == 0);
+    if (isCustomProfile &&
+        keycode != device->profile->pageUpCode &&
+        keycode != device->profile->pageDownCode) {
+      for (size_t bi = 0; bi < length && bi < 8; bi++) {
+        const uint8_t b = pData[bi];
+        if (b == device->profile->pageUpCode || b == device->profile->pageDownCode) {
+          keycode = b;
+          keycodeIndex = static_cast<uint8_t>(bi);
+          LOG_DBG("BT", "Custom profile: found learned code 0x%02X at byte[%u] (vs fixed idx %u)",
+                  keycode, static_cast<unsigned>(bi),
+                  static_cast<unsigned>(device->profile->reportByteIndex));
+          break;
+        }
+      }
+    }
+
     // For Game Brick: press state from byte[0] bit 0
     // For standard HID keyboards: press state from keycode (non-zero = pressed)
     if (strcmp(device->profile->name, "IINE Game Brick") == 0) {
@@ -662,8 +701,13 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
 
       LOG_DBG("BT", "Game Brick: byte[0]=0x%02X, keycode=0x%02X, pressed=%d", pData[0], keycode, isPressed);
     } else {
-      // Standard HID keyboards: keycode presence indicates press
-      // 0x00 = not pressed, any other value = pressed
+      // Standard HID keyboards/custom profiles: keycode non-zero = pressed.
+      // Normalise 0xFF (= "nothing found in report") to 0x00 so that short
+      // release frames (e.g. 1-byte consumer control [0x00]) are treated as
+      // a key-release rather than a phantom press.
+      if (keycode == 0xFF) {
+        keycode = 0x00;
+      }
       isPressed = (keycode != 0x00);
       LOG_DBG("BT", "Device %s: keycode=0x%02X, pressed=%d", device->profile->name, keycode, isPressed);
     }
@@ -787,12 +831,30 @@ uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, const DevicePro
     } else if (keycode == profile->pageDownCode) {
       LOG_INF("BT", "Matched profile pageDownCode 0x%02X (%s) -> PageForward", keycode, profile->name);
       return HalGPIO::BTN_DOWN;
-    } else {
-      // Not a profile-mapped keycode - ignore it
-      LOG_DBG("BT", "Keycode 0x%02X not in profile %s (expecting 0x%02X/0x%02X), ignoring", 
-              keycode, profile->name, profile->pageUpCode, profile->pageDownCode);
-      return 0xFF;
     }
+
+    // The known profile didn't recognise this keycode. For non-strict (standard layout)
+    // profiles, also consult the user-learned custom mapping as a fallback. This covers
+    // the common case where a device partially matches a known profile (e.g. its back
+    // button matches MINI_KEYBOARD but its forward button uses a different code).
+    const bool isStrict = profile->strictProfile;
+    if (!isStrict) {
+      if (const auto* learned = DeviceProfiles::getCustomProfile()) {
+        if (keycode == learned->pageUpCode) {
+          LOG_INF("BT", "Custom-fallback: 0x%02X -> PageBack (profile=%s)", keycode, profile->name);
+          return HalGPIO::BTN_UP;
+        }
+        if (keycode == learned->pageDownCode) {
+          LOG_INF("BT", "Custom-fallback: 0x%02X -> PageForward (profile=%s)", keycode, profile->name);
+          return HalGPIO::BTN_DOWN;
+        }
+      }
+    }
+
+    // Not matched by profile or fallback - ignore
+    LOG_DBG("BT", "Keycode 0x%02X not in profile %s (expecting 0x%02X/0x%02X), ignoring",
+            keycode, profile->name, profile->pageUpCode, profile->pageDownCode);
+    return 0xFF;
   }
 
   // Learned mappings are only used for unknown devices.
