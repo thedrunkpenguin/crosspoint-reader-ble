@@ -11,7 +11,17 @@ fully-featured, open-source replacement firmware with additional quality-of-life
 
 ## Release Highlights
 
-### v1.1.1.3-ble (latest)
+### v1.1.1.4-ble (latest)
+
+- Fixes duplicate back-page triggers for **GameBrick / IINE_control** remotes where one physical press could
+  generate two page-back actions (visible as a double screen blink).
+- GameBrick handling now ignores transitional noise frames without forcing internal press-state resets.
+- Adds GameBrick-specific press deduping so key-change chatter while a button is still held does not create
+  a second synthetic press event.
+- Adds a short GameBrick duplicate debounce window for repeated identical keycode injections.
+- Keeps **MINI_KEYBOARD** behavior unchanged.
+
+### v1.1.1.3-ble
 
 Improved BLE key learning for unknown and generic devices — addresses the common case where a user could
 learn the **Previous** button but the **Next** button failed to save:

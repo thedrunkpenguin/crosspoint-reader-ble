@@ -635,6 +635,7 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   uint8_t keycode = 0xFF;
   uint8_t keycodeIndex = 0xFF;
   bool isPressed = false;
+  bool isGameBrickProfile = false;
   
   if (length < 1) {
     LOG_DBG("BT", "HID report empty, ignoring");
@@ -673,13 +674,15 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
     // For Game Brick: press state from byte[0] bit 0
     // For standard HID keyboards: press state from keycode (non-zero = pressed)
     if (strcmp(device->profile->name, "IINE Game Brick") == 0) {
+      isGameBrickProfile = true;
       // Game Brick: accept only stable digital-button report family (0x1x).
       // Ignore noisy transitional frames (commonly 0x2x/0x3x) that can trigger false presses.
       const bool stableButtonReport = (pData[0] & 0xF0) == 0x10;
       if (!stableButtonReport) {
         LOG_DBG("BT", "Game Brick: ignoring transitional report byte[0]=0x%02X, keycode=0x%02X", pData[0], keycode);
-        device->lastButtonState = false;
-        device->lastHIDKeycode = 0x00;
+        // Keep the previous button state intact while skipping transitional frames.
+        // Resetting state here can create a duplicate "new press" on the next stable
+        // frame, which shows up as a double page-turn.
         return;
       }
 
@@ -751,9 +754,11 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
     return;
   }
 
-  // Detect button PRESS transition: new press or changed key while still pressed.
-  // Some remotes keep pressed-state high while changing keycode; treat key change as a new event.
-  const bool isNewPressEvent = isPressed && (!device->lastButtonState || keycode != device->lastHIDKeycode);
+  // Detect button PRESS transition.
+  // For most remotes, key changes while held are treated as a new press event.
+  // For Game Brick, ignore key-change retriggers while held to avoid duplicate events.
+  const bool isNewPressEvent =
+      isPressed && (!device->lastButtonState || (!isGameBrickProfile && keycode != device->lastHIDKeycode));
   if (isNewPressEvent) {
     LOG_INF("BT", ">>> BUTTON PRESSED: keycode=0x%02X <<<", keycode);
 
@@ -777,12 +782,18 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
     }
 
     if (g_instance->_buttonInjector && device->activeInjectedButton == 0xFF) {
+      if (isGameBrickProfile && device->lastInjectedKeycode == keycode &&
+          (millis() - device->lastInjectionTime) < 180) {
+        LOG_DBG("BT", "Game Brick: debouncing duplicate key 0x%02X (%lu ms)", keycode,
+                millis() - device->lastInjectionTime);
+      } else {
       String buttonName = (mappedButton == HalGPIO::BTN_DOWN) ? "PageForward" : "PageBack";
       LOG_INF("BT", "Mapped key 0x%02X -> %s", keycode, buttonName.c_str());
       g_instance->_buttonInjector(mappedButton, true);
       device->activeInjectedButton = mappedButton;
       device->lastInjectionTime = millis();
       device->lastInjectedKeycode = keycode;
+      }
     }
   }
   
