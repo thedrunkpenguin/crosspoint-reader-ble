@@ -11,7 +11,13 @@ fully-featured, open-source replacement firmware with additional quality-of-life
 
 ## Release Highlights
 
-### v1.1.1.6-ble (latest)
+### v1.1.1.7-ble (latest)
+
+- Bluetooth Debug Monitor now shows **unique keycodes with hit counts** for better unknown-remote integration.
+- Unique key list is sorted by **highest frequency first**, making dominant forward/back candidate codes easier to identify.
+- Keeps existing wizard/test counters and per-device persistence behavior from `v1.1.1.6-ble`.
+
+### v1.1.1.6-ble
 
 - Adds a true **Remote Setup Wizard** flow: Forward → Back → 10-second test → save.
 - Wizard test step now shows live **Forward/Back hit counters** so users can verify key capture.

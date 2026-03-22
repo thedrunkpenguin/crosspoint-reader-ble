@@ -31,6 +31,9 @@ void BluetoothSettingsActivity::onEnter() {
   debugLastKeycode = 0;
   debugEventCount = 0;
   debugLastEventMs = 0;
+  debugUniqueCount = 0;
+  memset(debugUniqueKeys, 0, sizeof(debugUniqueKeys));
+  memset(debugUniqueCounts, 0, sizeof(debugUniqueCounts));
   learnStep = LearnStep::WAIT_PREV;
   
   // Get BLE manager instance
@@ -261,10 +264,31 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
       debugLastKeycode = 0;
       debugEventCount = 0;
       debugLastEventMs = 0;
+      debugUniqueCount = 0;
+      memset(debugUniqueKeys, 0, sizeof(debugUniqueKeys));
+      memset(debugUniqueCounts, 0, sizeof(debugUniqueCounts));
       btMgr->setInputCallback([this](uint16_t keycode) {
         debugLastKeycode = keycode & 0xFF;
         debugEventCount++;
         debugLastEventMs = millis();
+
+        const uint8_t code = static_cast<uint8_t>(keycode & 0xFF);
+        bool found = false;
+        for (uint8_t i = 0; i < debugUniqueCount; i++) {
+          if (debugUniqueKeys[i] == code) {
+            if (debugUniqueCounts[i] < 65535) {
+              debugUniqueCounts[i]++;
+            }
+            found = true;
+            break;
+          }
+        }
+
+        if (!found && debugUniqueCount < kDebugUniqueKeyMax) {
+          debugUniqueKeys[debugUniqueCount] = code;
+          debugUniqueCounts[debugUniqueCount] = 1;
+          debugUniqueCount++;
+        }
       });
       viewMode = ViewMode::DEBUG_MONITOR;
       lastError = "BT debug monitor";
@@ -809,11 +833,13 @@ void BluetoothSettingsActivity::renderDebugMonitor() {
   char line1[64];
   char line2[64];
   char line3[64];
+  char line4[64];
 
   unsigned int connectedCount = btMgr ? static_cast<unsigned int>(btMgr->getConnectedDevices().size()) : 0;
   snprintf(line1, sizeof(line1), "Connected: %u", connectedCount);
   snprintf(line2, sizeof(line2), "Key events: %u", static_cast<unsigned>(debugEventCount));
-  snprintf(line3, sizeof(line3), "Last key: 0x%02X", static_cast<unsigned>(debugLastKeycode & 0xFF));
+  snprintf(line3, sizeof(line3), "Unique keys: %u", static_cast<unsigned>(debugUniqueCount));
+  snprintf(line4, sizeof(line4), "Last key: 0x%02X", static_cast<unsigned>(debugLastKeycode & 0xFF));
 
   renderer.drawCenteredText(UI_12_FONT_ID, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + 24,
                             line1);
@@ -821,13 +847,56 @@ void BluetoothSettingsActivity::renderDebugMonitor() {
                             line2);
   renderer.drawCenteredText(UI_12_FONT_ID, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + 72,
                             line3);
+  renderer.drawCenteredText(UI_12_FONT_ID, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + 96,
+                            line4);
 
   if (debugLastEventMs > 0) {
-    char line4[64];
-    snprintf(line4, sizeof(line4), "Last event: %lus ago", (millis() - debugLastEventMs) / 1000);
+    char eventAgeLine[64];
+    snprintf(eventAgeLine, sizeof(eventAgeLine), "Last event: %lus ago", (millis() - debugLastEventMs) / 1000);
     renderer.drawCenteredText(UI_10_FONT_ID,
-                              metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + 94,
-                              line4);
+                              metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + 114,
+                              eventAgeLine);
+  }
+
+  const int uniqueStartY = metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + 132;
+  if (debugUniqueCount == 0) {
+    renderer.drawCenteredText(UI_10_FONT_ID, uniqueStartY, "No key presses captured yet");
+  } else {
+    uint8_t sortedIndices[kDebugUniqueKeyMax] = {0};
+    for (uint8_t i = 0; i < debugUniqueCount; i++) {
+      sortedIndices[i] = i;
+    }
+
+    for (uint8_t i = 0; i + 1 < debugUniqueCount; i++) {
+      uint8_t best = i;
+      for (uint8_t j = i + 1; j < debugUniqueCount; j++) {
+        const uint16_t bestCount = debugUniqueCounts[sortedIndices[best]];
+        const uint16_t candidateCount = debugUniqueCounts[sortedIndices[j]];
+        if (candidateCount > bestCount) {
+          best = j;
+        }
+      }
+      if (best != i) {
+        const uint8_t tmp = sortedIndices[i];
+        sortedIndices[i] = sortedIndices[best];
+        sortedIndices[best] = tmp;
+      }
+    }
+
+    const uint8_t renderCount = (debugUniqueCount < 4) ? debugUniqueCount : 4;
+    for (uint8_t i = 0; i < renderCount; i++) {
+      const uint8_t idx = sortedIndices[i];
+      char keyLine[64];
+      snprintf(keyLine, sizeof(keyLine), "Key 0x%02X  x%u", static_cast<unsigned>(debugUniqueKeys[idx]),
+               static_cast<unsigned>(debugUniqueCounts[idx]));
+      renderer.drawCenteredText(UI_10_FONT_ID, uniqueStartY + static_cast<int>(i) * 16, keyLine);
+    }
+
+    if (debugUniqueCount > renderCount) {
+      char moreLine[48];
+      snprintf(moreLine, sizeof(moreLine), "+%u more keys", static_cast<unsigned>(debugUniqueCount - renderCount));
+      renderer.drawCenteredText(UI_10_FONT_ID, uniqueStartY + static_cast<int>(renderCount) * 16, moreLine);
+    }
   }
 
   if (!lastError.empty()) {

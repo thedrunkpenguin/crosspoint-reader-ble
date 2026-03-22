@@ -42,6 +42,10 @@ class BluetoothSettingsActivity : public Activity {
   uint16_t debugLastKeycode = 0;
   uint32_t debugEventCount = 0;
   unsigned long debugLastEventMs = 0;
+  static constexpr uint8_t kDebugUniqueKeyMax = 8;
+  uint8_t debugUniqueKeys[kDebugUniqueKeyMax] = {0};
+  uint16_t debugUniqueCounts[kDebugUniqueKeyMax] = {0};
+  uint8_t debugUniqueCount = 0;
   bool exitOnSuccessfulConnect = false;
 
  public:
