@@ -24,6 +24,7 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
   - [5. Chapter Selection Screen](#5-chapter-selection-screen)
   - [6. Current Limitations \& Roadmap](#6-current-limitations--roadmap)
   - [7. Troubleshooting Issues \& Escaping Bootloop](#7-troubleshooting-issues--escaping-bootloop)
+  - [8. Bluetooth Remote Setup \& Debug](#8-bluetooth-remote-setup--debug)
 
 
 ## 1. Hardware Overview
@@ -245,3 +246,31 @@ pio device monitor
 If the device is stuck in a bootloop, press and release the Reset button. Then, press and hold on to the configured Back button and the Power Button to boot to the Home Screen.
 
 There can be issues with broken cache or config. In this case, delete the `.crosspoint` directory on your SD card (or consider deleting only `settings.bin`, `state.bin`, or `epub_*` cache directories in the `.crosspoint/` folder).
+
+---
+
+## 8. Bluetooth Remote Setup & Debug
+
+If your Bluetooth page-turn remote is unknown or not yet integrated, use this workflow to capture stable keycodes and map them correctly.
+
+1. Open **Settings → Bluetooth**.
+2. Select **Enable Bluetooth**.
+3. Select **Scan for Devices**, choose your remote, and connect.
+4. Select **Enable BT Debug Capture** to open the debug monitor.
+5. Press your remote buttons a few times and watch:
+  - **Unique keys** (number of distinct keycodes seen)
+  - **Key 0xNN xCount** lines (sorted by highest hit count first)
+6. Identify the two dominant page-turn keycodes (typically your forward/back buttons).
+7. Press **Back**, then run **Remote Setup Wizard**.
+8. In the wizard:
+  - Press your **Forward** button when prompted.
+  - Press your **Back** button when prompted.
+  - In the test step, verify both counters increment.
+  - Press **Confirm** to save.
+
+### Tips for unknown remotes
+
+- Press only one remote button repeatedly during debug to isolate its keycode.
+- If a key appears once while another appears repeatedly, trust the higher-count key first.
+- If no keycodes appear, reconnect the remote and ensure debug capture is ON.
+- If wrong page direction is saved, rerun **Remote Setup Wizard** and swap forward/back inputs.
