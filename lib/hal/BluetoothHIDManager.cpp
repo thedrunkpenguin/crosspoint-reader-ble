@@ -9,6 +9,14 @@
 static const char* HID_SERVICE_UUID = "1812";
 static const char* HID_REPORT_UUID = "2A4D";
 static const char* HID_INFO_UUID = "2A4A";
+static const char* HID_REPORT_MAP_UUID = "2A4B";
+static const char* HID_PROTOCOL_MODE_UUID = "2A4E";
+
+struct ReportMapHints {
+  bool hasConsumerPage = false;
+  bool hasKeyboardPage = false;
+  uint8_t preferredByteIndex = 0xFF;
+};
 
 struct ExtractedHIDKey {
   uint8_t keycode = 0x00;
@@ -52,6 +60,38 @@ static ExtractedHIDKey extractGenericPageTurnKeycode(const uint8_t* report, size
   }
 
   return result;
+}
+
+static ReportMapHints parseReportMapHints(const std::string& map) {
+  ReportMapHints hints;
+  if (map.empty()) {
+    return hints;
+  }
+
+  for (size_t i = 0; i + 1 < map.size(); i++) {
+    const uint8_t b = static_cast<uint8_t>(map[i]);
+    const uint8_t next = static_cast<uint8_t>(map[i + 1]);
+
+    // Usage Page (1 byte value)
+    if (b == 0x05) {
+      if (next == 0x0C) {
+        hints.hasConsumerPage = true;
+      } else if (next == 0x07) {
+        hints.hasKeyboardPage = true;
+      }
+    }
+  }
+
+  // Heuristic preferred byte index:
+  // keyboard-like reports commonly place keycode at byte[2], consumer-control
+  // reports are often compact and keycode-like values appear at byte[1].
+  if (hints.hasKeyboardPage) {
+    hints.preferredByteIndex = 2;
+  } else if (hints.hasConsumerPage) {
+    hints.preferredByteIndex = 1;
+  }
+
+  return hints;
 }
 
 // Global static for singleton
@@ -353,6 +393,27 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
       pClient->disconnect();
       return false;
     }
+
+    // Attempt to force Report Protocol mode (0x01) when supported.
+    // Some remotes behave inconsistently unless protocol mode is explicit.
+    if (auto* pProtocolMode = pService->getCharacteristic(HID_PROTOCOL_MODE_UUID)) {
+      if (pProtocolMode->canWrite() || pProtocolMode->canWriteNoResponse()) {
+        uint8_t reportMode = 0x01;
+        const bool protocolSet = pProtocolMode->writeValue(&reportMode, 1, false);
+        LOG_INF("BT", "Protocol mode write (Report=0x01): %d", protocolSet);
+      }
+    }
+
+    ReportMapHints reportHints;
+    if (auto* pReportMap = pService->getCharacteristic(HID_REPORT_MAP_UUID)) {
+      if (pReportMap->canRead()) {
+        std::string reportMap = pReportMap->readValue();
+        reportHints = parseReportMapHints(reportMap);
+        LOG_INF("BT", "Report map hints: keyboard=%d consumer=%d preferredByte=%d len=%u",
+                reportHints.hasKeyboardPage, reportHints.hasConsumerPage,
+                static_cast<int>(reportHints.preferredByteIndex), static_cast<unsigned>(reportMap.size()));
+      }
+    }
     
     LOG_INF("BT", "Found HID service, enumerating report characteristics...");
     
@@ -396,9 +457,14 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
     for (size_t i = 0; i < reportChars.size(); i++) {
       auto* pChar = reportChars[i];
       
-      // Subscribe with callback
-      bool subResult = pChar->subscribe(true, onHIDNotify);
-      LOG_INF("BT", "Report char #%d subscribe result: %d", i + 1, subResult);
+      // Clear stale CCCD state on reused clients where possible.
+      (void)pChar->unsubscribe();
+
+      // Use notifications when available, otherwise indications.
+      const bool useNotify = pChar->canNotify();
+      bool subResult = pChar->subscribe(useNotify, onHIDNotify);
+      LOG_INF("BT", "Report char #%d subscribe (%s) result: %d", i + 1, useNotify ? "notify" : "indicate",
+              subResult);
       if (subResult) {
         successfulSubscriptions++;
       }
@@ -427,6 +493,9 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
     connDev.subscribed = true;
     connDev.lastActivityTime = millis();  // Initialize activity timer
     connDev.wasConnected = true;  // Mark for auto-reconnect if disconnected
+    connDev.descriptorHasKeyboardPage = reportHints.hasKeyboardPage;
+    connDev.descriptorHasConsumerPage = reportHints.hasConsumerPage;
+    connDev.descriptorSuggestedIndex = reportHints.preferredByteIndex;
     
     // Detect device profile
     // First, try to find the device in scan results to get its name
@@ -446,10 +515,14 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
     
     // Profile matching priority:
     //  1. MAC-prefix exact match  (hardware ID, precise – always wins)
-    //  2. User-learned custom profile (explicitly taught by the user)
+    //  2. Per-device learned profile by full MAC address
+    //  3. User-learned global custom profile (explicitly taught by the user)
     //     → only if the name-matched known profile is NOT marked strictProfile
-    //  3. Fuzzy name-pattern match  (last resort – can produce false positives)
+    //  4. Fuzzy name-pattern match  (last resort – can produce false positives)
     connDev.profile = DeviceProfiles::findDeviceProfile(address.c_str(), nullptr);
+
+    DeviceProfiles::DeviceProfile perDeviceProfile;
+    const bool hasPerDeviceProfile = DeviceProfiles::getCustomProfileForDevice(address, perDeviceProfile);
 
     if (!connDev.profile) {
       // Check if a name-matched profile exists and whether it is strict.
@@ -457,13 +530,22 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
           DeviceProfiles::findDeviceProfile(nullptr, connDev.name.c_str());
       const bool nameMatchIsStrict = nameMatch && nameMatch->strictProfile;
 
+      if (hasPerDeviceProfile && !nameMatchIsStrict) {
+        connDev.simpleFallbackEnabled = true;
+        connDev.simpleBackKeycode = perDeviceProfile.pageUpCode;
+        connDev.simpleForwardKeycode = perDeviceProfile.pageDownCode;
+        LOG_INF("BT", "Using per-device learned profile for %s: up=0x%02X down=0x%02X idx=%u", address.c_str(),
+          perDeviceProfile.pageUpCode, perDeviceProfile.pageDownCode,
+          static_cast<unsigned>(perDeviceProfile.reportByteIndex));
+      }
+
       // Prefer the user's learned mapping over a non-strict name-based guess.
       const auto* customProfile = DeviceProfiles::getCustomProfile();
-      if (customProfile && !nameMatchIsStrict) {
+      if (!connDev.profile && customProfile && !nameMatchIsStrict) {
         connDev.profile = customProfile;
         LOG_INF("BT", "Using learned custom profile (overrides non-strict name match): up=0x%02X dn=0x%02X",
                 customProfile->pageUpCode, customProfile->pageDownCode);
-      } else if (nameMatch) {
+      } else if (!connDev.profile && nameMatch) {
         connDev.profile = nameMatch;
         if (nameMatchIsStrict) {
           LOG_INF("BT", "Using strict name-matched profile '%s' (custom profile bypassed)",
@@ -480,9 +562,11 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
       connDev.simpleFallbackEnabled = false;
     } else {
       LOG_INF("BT", "No known profile matched for %s, will auto-detect from HID codes", address.c_str());
-      connDev.simpleFallbackEnabled = true;
-      connDev.simpleForwardKeycode = 0x00;
-      connDev.simpleBackKeycode = 0x00;
+      if (!connDev.simpleFallbackEnabled) {
+        connDev.simpleFallbackEnabled = true;
+        connDev.simpleForwardKeycode = 0x00;
+        connDev.simpleBackKeycode = 0x00;
+      }
       LOG_INF("BT", "Simple fallback enabled for unknown device %s", address.c_str());
     }
     
@@ -629,6 +713,16 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   // Update activity timestamp to keep connection alive
   device->lastActivityTime = millis();
 
+  if (g_instance->_debugCaptureEnabled) {
+    char rawBuf[128] = {0};
+    size_t offset = 0;
+    const size_t dumpLen = length < 8 ? length : 8;
+    for (size_t i = 0; i < dumpLen && offset + 4 < sizeof(rawBuf); i++) {
+      offset += snprintf(rawBuf + offset, sizeof(rawBuf) - offset, "%02X ", static_cast<unsigned>(pData[i]));
+    }
+    LOG_INF("BTDBG", "addr=%s len=%u raw=%s", device->address.c_str(), static_cast<unsigned>(length), rawBuf);
+  }
+
   auto releaseInjectedButton = [&]() {
     if (g_instance->_buttonInjector && device->activeInjectedButton != 0xFF) {
       g_instance->_buttonInjector(device->activeInjectedButton, false);
@@ -725,6 +819,15 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
     keycode = extracted.keycode;
     keycodeIndex = extracted.reportIndex;
 
+    if (device->descriptorSuggestedIndex != 0xFF && length > device->descriptorSuggestedIndex) {
+      const uint8_t hintedCode = pData[device->descriptorSuggestedIndex];
+      if (hintedCode != 0x00 && hintedCode != 0xFF &&
+          (keycode == 0x00 || keycode == 0xFF || DeviceProfiles::isCommonPageTurnCode(hintedCode))) {
+        keycode = hintedCode;
+        keycodeIndex = device->descriptorSuggestedIndex;
+      }
+    }
+
     // Keep existing GameBrick bit0 press-state behavior when applicable.
     if (length >= 5 && (keycode == 0x07 || keycode == 0x09)) {
       isPressed = ((pData[0] & 0x01) != 0) || (keycode != 0x00);
@@ -762,8 +865,18 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   // Detect button PRESS transition.
   // For most remotes, key changes while held are treated as a new press event.
   // For Game Brick, ignore key-change retriggers while held to avoid duplicate events.
-  const bool isNewPressEvent =
+  bool isNewPressEvent =
       isPressed && (!device->lastButtonState || (!isGameBrickProfile && keycode != device->lastHIDKeycode));
+
+  const unsigned long nowMs = millis();
+  if (isNewPressEvent && device->lastNormalizedPressed && device->lastNormalizedKeycode == keycode &&
+      (nowMs - device->lastNormalizedEventMs) < 90) {
+    isNewPressEvent = false;
+    if (g_instance->_debugCaptureEnabled) {
+      LOG_INF("BTDBG", "Suppressed jitter duplicate key=0x%02X dt=%lu", keycode,
+              nowMs - device->lastNormalizedEventMs);
+    }
+  }
   if (isNewPressEvent) {
     LOG_INF("BT", ">>> BUTTON PRESSED: keycode=0x%02X <<<", keycode);
 
@@ -805,6 +918,9 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   // Track the button state and keycode for next time
   device->lastButtonState = isPressed;
   device->lastHIDKeycode = keycode;
+  device->lastNormalizedEventMs = nowMs;
+  device->lastNormalizedKeycode = keycode;
+  device->lastNormalizedPressed = isPressed;
 }
 
 uint16_t BluetoothHIDManager::parseHIDReport(uint8_t* data, size_t length) {
@@ -906,6 +1022,12 @@ uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, ConnectedDevice
     if (device->simpleForwardKeycode == 0x00) {
       device->simpleForwardKeycode = keycode;
       LOG_INF("BT", "Simple fallback learned FORWARD keycode 0x%02X", keycode);
+
+      if (device->simpleBackKeycode != 0x00) {
+        const uint8_t idx = (device->descriptorSuggestedIndex == 0xFF) ? 2 : device->descriptorSuggestedIndex;
+        DeviceProfiles::setCustomProfileForDevice(device->address, device->simpleBackKeycode,
+                                                  device->simpleForwardKeycode, idx);
+      }
       return HalGPIO::BTN_DOWN;
     }
 
@@ -916,6 +1038,9 @@ uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, ConnectedDevice
     if (device->simpleBackKeycode == 0x00) {
       device->simpleBackKeycode = keycode;
       LOG_INF("BT", "Simple fallback learned BACK keycode 0x%02X", keycode);
+      const uint8_t idx = (device->descriptorSuggestedIndex == 0xFF) ? 2 : device->descriptorSuggestedIndex;
+      DeviceProfiles::setCustomProfileForDevice(device->address, device->simpleBackKeycode,
+                                                device->simpleForwardKeycode, idx);
       return HalGPIO::BTN_UP;
     }
 

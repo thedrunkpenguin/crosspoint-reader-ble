@@ -12,12 +12,14 @@ class BluetoothSettingsActivity : public Activity {
   enum class ViewMode {
     MAIN_MENU,
     DEVICE_LIST,
-    LEARN_KEYS
+    LEARN_KEYS,
+    DEBUG_MONITOR
   };
 
   enum class LearnStep {
     WAIT_PREV,
     WAIT_NEXT,
+    WAIT_TEST,
     DONE
   };
 
@@ -32,6 +34,14 @@ class BluetoothSettingsActivity : public Activity {
   uint8_t learnedPrevKey = 0;
   uint8_t learnedNextKey = 0;
   uint8_t learnedReportIndex = 2;
+  unsigned long learnTestDeadlineMs = 0;
+  bool learnTestForwardSeen = false;
+  bool learnTestBackSeen = false;
+  uint16_t learnTestForwardCount = 0;
+  uint16_t learnTestBackCount = 0;
+  uint16_t debugLastKeycode = 0;
+  uint32_t debugEventCount = 0;
+  unsigned long debugLastEventMs = 0;
   bool exitOnSuccessfulConnect = false;
 
  public:
@@ -51,9 +61,11 @@ class BluetoothSettingsActivity : public Activity {
   void handleMainMenuInput();
   void handleDeviceListInput();
   void handleLearnInput();
+  void handleDebugInput();
   void renderMainMenu();
   void renderDeviceList();
   void renderLearnKeys();
+  void renderDebugMonitor();
   std::string getSignalStrengthIndicator(const int32_t rssi) const;
   
   const std::function<void()> onComplete;

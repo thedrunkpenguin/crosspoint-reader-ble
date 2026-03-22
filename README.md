@@ -11,7 +11,18 @@ fully-featured, open-source replacement firmware with additional quality-of-life
 
 ## Release Highlights
 
-### v1.1.1.5-ble (latest)
+### v1.1.1.6-ble (latest)
+
+- Adds a true **Remote Setup Wizard** flow: Forward → Back → 10-second test → save.
+- Wizard test step now shows live **Forward/Back hit counters** so users can verify key capture.
+- Wizard success now returns directly to the Bluetooth menu (or back to the book when opened in-reader).
+- Adds a dedicated **Bluetooth Debug Monitor** screen (connected count, event count, last key, last event age).
+- Adds **per-device learned key persistence by MAC**, auto-applied on reconnect for unknown remotes.
+- Adds HID report-map driven hints (Keyboard/Consumer usage-page detection + preferred byte heuristic).
+- Improves reconnect robustness (protocol mode write, stale CCCD clear, notify/indicate-aware subscribe).
+- Adds central input de-jitter suppression for duplicate rapid events.
+
+### v1.1.1.5-ble
 
 - Adds **Simple Bluetooth fallback** for unknown remotes: for devices without a known profile,
   first detected key is treated as **Forward**, second distinct key as **Back**.

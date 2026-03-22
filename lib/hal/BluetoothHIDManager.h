@@ -38,6 +38,12 @@ struct ConnectedDevice {
   bool simpleFallbackEnabled = false;
   uint8_t simpleForwardKeycode = 0x00;
   uint8_t simpleBackKeycode = 0x00;
+  bool descriptorHasConsumerPage = false;
+  bool descriptorHasKeyboardPage = false;
+  uint8_t descriptorSuggestedIndex = 0xFF;
+  unsigned long lastNormalizedEventMs = 0;
+  uint8_t lastNormalizedKeycode = 0x00;
+  bool lastNormalizedPressed = false;
 };
 
 class BluetoothHIDManager {
@@ -67,6 +73,8 @@ public:
   void setInputCallback(std::function<void(uint16_t keycode)> callback);
   void setLearnInputCallback(std::function<void(uint8_t keycode, uint8_t reportIndex)> callback);
   void setButtonInjector(std::function<void(uint8_t buttonIndex, bool pressed)> injector);
+  void setDebugCaptureEnabled(bool enabled) { _debugCaptureEnabled = enabled; }
+  bool isDebugCaptureEnabled() const { return _debugCaptureEnabled; }
   void setBondedDevice(const std::string& address, const std::string& name = "");
   void updateActivity();  // Call periodically to check inactivity timeout
   void checkAutoReconnect(bool userInputDetected = false);  // Reconnect bonded device when disconnected
@@ -103,6 +111,7 @@ private:
   std::function<void(uint16_t)> _inputCallback;
   std::function<void(uint8_t, uint8_t)> _learnInputCallback;
   std::function<void(uint8_t, bool)> _buttonInjector;
+  bool _debugCaptureEnabled = false;
   std::string _bondedDeviceAddress;
   std::string _bondedDeviceName;
   

@@ -92,9 +92,26 @@ bool mapCommonCodeToDirection(uint8_t code, bool& pageForward);
 const DeviceProfile* getCustomProfile();
 
 /**
+ * Get a device-specific learned profile by MAC address.
+ * Returns true and fills outProfile if a mapping exists.
+ */
+bool getCustomProfileForDevice(const std::string& macAddress, DeviceProfile& outProfile);
+
+/**
  * Set a user-configured device profile in settings
  */
 void setCustomProfile(uint8_t pageUpCode, uint8_t pageDownCode, uint8_t reportByteIndex);
+
+/**
+ * Set a device-specific learned profile in settings.
+ */
+void setCustomProfileForDevice(const std::string& macAddress, uint8_t pageUpCode, uint8_t pageDownCode,
+                               uint8_t reportByteIndex);
+
+/**
+ * Remove a device-specific learned profile.
+ */
+void clearCustomProfileForDevice(const std::string& macAddress);
 
 /**
  * Clear custom profile and revert to auto-detection

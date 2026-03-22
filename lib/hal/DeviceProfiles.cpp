@@ -2,14 +2,87 @@
 
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <Logging.h>
 #include <HalStorage.h>
 
 namespace {
 constexpr const char* CUSTOM_PROFILE_FILE = "/.crosspoint/ble_custom_profile.txt";
+constexpr const char* DEVICE_PROFILE_FILE = "/.crosspoint/ble_device_profiles.txt";
 
 DeviceProfiles::DeviceProfile customProfile = {"Custom BLE Remote", nullptr, 0x00, 0x00, false, 2, false};
 bool customProfileLoaded = false;
+std::map<std::string, DeviceProfiles::DeviceProfile> perDeviceProfiles;
+bool perDeviceProfilesLoaded = false;
+
+std::string normalizeAddress(const std::string& address) {
+  std::string out = address;
+  for (auto& ch : out) {
+    if (ch >= 'A' && ch <= 'F') {
+      ch = static_cast<char>(ch - 'A' + 'a');
+    }
+  }
+  return out;
+}
+
+void savePerDeviceProfilesToStorage() {
+  Storage.mkdir("/.crosspoint");
+
+  std::string all;
+  for (const auto& entry : perDeviceProfiles) {
+    const auto& addr = entry.first;
+    const auto& profile = entry.second;
+    char line[80];
+    snprintf(line, sizeof(line), "%s,%u,%u,%u\n", addr.c_str(), static_cast<unsigned>(profile.pageUpCode),
+             static_cast<unsigned>(profile.pageDownCode), static_cast<unsigned>(profile.reportByteIndex));
+    all += line;
+  }
+
+  Storage.writeFile(DEVICE_PROFILE_FILE, all.c_str());
+}
+
+void loadPerDeviceProfilesFromStorage() {
+  if (perDeviceProfilesLoaded) {
+    return;
+  }
+  perDeviceProfilesLoaded = true;
+  perDeviceProfiles.clear();
+
+  if (!Storage.exists(DEVICE_PROFILE_FILE)) {
+    return;
+  }
+
+  String content = Storage.readFile(DEVICE_PROFILE_FILE);
+  if (content.isEmpty()) {
+    return;
+  }
+
+  int start = 0;
+  while (start < content.length()) {
+    int end = content.indexOf('\n', start);
+    if (end < 0) {
+      end = content.length();
+    }
+    String line = content.substring(start, end);
+    line.trim();
+    if (!line.isEmpty()) {
+      char addrBuf[32] = {0};
+      unsigned int up = 0;
+      unsigned int down = 0;
+      unsigned int reportIndex = 2;
+      const int parsed = sscanf(line.c_str(), "%31[^,],%u,%u,%u", addrBuf, &up, &down, &reportIndex);
+      if (parsed == 4 && up <= 0xFF && down <= 0xFF && up != 0 && down != 0 && reportIndex <= 0xFF) {
+        DeviceProfiles::DeviceProfile profile = {"Custom BLE Remote", nullptr, static_cast<uint8_t>(up),
+                                                 static_cast<uint8_t>(down), false,
+                                                 static_cast<uint8_t>(reportIndex), false};
+        perDeviceProfiles[normalizeAddress(addrBuf)] = profile;
+      }
+    }
+    start = end + 1;
+  }
+
+  LOG_INF("DEV", "Loaded %u per-device BLE profiles", static_cast<unsigned>(perDeviceProfiles.size()));
+}
 
 void loadCustomProfileFromStorage() {
   if (customProfileLoaded) {
@@ -191,6 +264,17 @@ const DeviceProfile* getCustomProfile() {
   return &customProfile;
 }
 
+bool getCustomProfileForDevice(const std::string& macAddress, DeviceProfile& outProfile) {
+  loadPerDeviceProfilesFromStorage();
+  const std::string norm = normalizeAddress(macAddress);
+  auto it = perDeviceProfiles.find(norm);
+  if (it == perDeviceProfiles.end()) {
+    return false;
+  }
+  outProfile = it->second;
+  return true;
+}
+
 void setCustomProfile(uint8_t pageUpCode, uint8_t pageDownCode, uint8_t reportByteIndex) {
   customProfile.pageUpCode = pageUpCode;
   customProfile.pageDownCode = pageDownCode;
@@ -206,12 +290,32 @@ void setCustomProfile(uint8_t pageUpCode, uint8_t pageDownCode, uint8_t reportBy
           static_cast<unsigned>(reportByteIndex));
 }
 
+void setCustomProfileForDevice(const std::string& macAddress, uint8_t pageUpCode, uint8_t pageDownCode,
+                               uint8_t reportByteIndex) {
+  loadPerDeviceProfilesFromStorage();
+  DeviceProfile profile = {"Custom BLE Remote", nullptr, pageUpCode, pageDownCode, false, reportByteIndex, false};
+  perDeviceProfiles[normalizeAddress(macAddress)] = profile;
+  savePerDeviceProfilesToStorage();
+  LOG_INF("DEV", "Saved per-device BLE profile for %s: up=0x%02X down=0x%02X idx=%u", macAddress.c_str(),
+          pageUpCode, pageDownCode, static_cast<unsigned>(reportByteIndex));
+}
+
+void clearCustomProfileForDevice(const std::string& macAddress) {
+  loadPerDeviceProfilesFromStorage();
+  perDeviceProfiles.erase(normalizeAddress(macAddress));
+  savePerDeviceProfilesToStorage();
+  LOG_INF("DEV", "Cleared per-device BLE profile for %s", macAddress.c_str());
+}
+
 void clearCustomProfile() {
   customProfile.pageUpCode = 0x00;
   customProfile.pageDownCode = 0x00;
   customProfile.reportByteIndex = 2;
   customProfileLoaded = true;
   Storage.remove(CUSTOM_PROFILE_FILE);
+  perDeviceProfiles.clear();
+  perDeviceProfilesLoaded = true;
+  Storage.remove(DEVICE_PROFILE_FILE);
   LOG_INF("DEV", "Custom profile cleared");
 }
 
