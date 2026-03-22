@@ -11,7 +11,16 @@ fully-featured, open-source replacement firmware with additional quality-of-life
 
 ## Release Highlights
 
-### v1.1.1.4-ble (latest)
+### v1.1.1.5-ble (latest)
+
+- Adds **Simple Bluetooth fallback** for unknown remotes: for devices without a known profile,
+  first detected key is treated as **Forward**, second distinct key as **Back**.
+- Keeps existing known-device profiles (GameBrick, MINI_KEYBOARD, etc.) unchanged.
+- Fixes intermittent idle lockups seen with Bluetooth enabled by preventing low-power CPU mode while
+  BLE is active and ensuring Bluetooth shutdown runs at normal speed before deep sleep.
+- Preserves existing GameBrick duplicate-back suppression improvements from `v1.1.1.4-ble`.
+
+### v1.1.1.4-ble
 
 - Fixes duplicate back-page triggers for **GameBrick / IINE_control** remotes where one physical press could
   generate two page-back actions (visible as a double screen blink).

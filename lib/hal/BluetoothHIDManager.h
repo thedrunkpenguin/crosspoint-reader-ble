@@ -35,6 +35,9 @@ struct ConnectedDevice {
   bool hasSeenRelease = false;         // Ignore startup noise until a release frame is seen
   bool lastButtonState = false;        // Track button pressed state (from byte[0])
   const DeviceProfiles::DeviceProfile* profile = nullptr;  // Device-specific HID profile
+  bool simpleFallbackEnabled = false;
+  uint8_t simpleForwardKeycode = 0x00;
+  uint8_t simpleBackKeycode = 0x00;
 };
 
 class BluetoothHIDManager {
@@ -91,7 +94,7 @@ private:
   void cleanup();
   uint16_t parseHIDReport(uint8_t* data, size_t length);
   ConnectedDevice* findConnectedDevice(const std::string& address);
-  uint8_t mapKeycodeToButton(uint8_t keycode, const DeviceProfiles::DeviceProfile* profile);
+  uint8_t mapKeycodeToButton(uint8_t keycode, ConnectedDevice* device);
 
   bool _enabled = false;
   bool _scanning = false;

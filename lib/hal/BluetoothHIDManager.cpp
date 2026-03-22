@@ -477,8 +477,13 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
     if (connDev.profile) {
       LOG_INF("BT", "✓ Using device profile: %s (byte[%d] for keycode)", 
               connDev.profile->name, connDev.profile->reportByteIndex);
+      connDev.simpleFallbackEnabled = false;
     } else {
       LOG_INF("BT", "No known profile matched for %s, will auto-detect from HID codes", address.c_str());
+      connDev.simpleFallbackEnabled = true;
+      connDev.simpleForwardKeycode = 0x00;
+      connDev.simpleBackKeycode = 0x00;
+      LOG_INF("BT", "Simple fallback enabled for unknown device %s", address.c_str());
     }
     
     auto existing = std::find_if(_connectedDevices.begin(), _connectedDevices.end(),
@@ -772,7 +777,7 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
     }
   }
 
-  const uint8_t mappedButton = isPressed ? g_instance->mapKeycodeToButton(keycode, device->profile) : 0xFF;
+  const uint8_t mappedButton = isPressed ? g_instance->mapKeycodeToButton(keycode, device) : 0xFF;
 
   if (!isPressed || mappedButton == 0xFF) {
     releaseInjectedButton();
@@ -828,7 +833,9 @@ uint16_t BluetoothHIDManager::parseHIDReport(uint8_t* data, size_t length) {
 // Map HID keycodes to navigator buttons based on device profile
 // Only maps keycodes that match the current device's profile to prevent
 // unwanted D-pad or other button inputs from triggering page turns
-uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, const DeviceProfiles::DeviceProfile* profile) {
+uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, ConnectedDevice* device) {
+  const DeviceProfiles::DeviceProfile* profile = device ? device->profile : nullptr;
+
   // Log keycode for debugging
   if (keycode != 0x00) {
     LOG_DBG("BT", "mapKeycodeToButton() called with keycode: 0x%02X", keycode);
@@ -895,7 +902,28 @@ uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, const DevicePro
     return 0xFF;
   }
 
-  // Unknown key for generic device; ignore safely.
+  if (device && device->simpleFallbackEnabled) {
+    if (device->simpleForwardKeycode == 0x00) {
+      device->simpleForwardKeycode = keycode;
+      LOG_INF("BT", "Simple fallback learned FORWARD keycode 0x%02X", keycode);
+      return HalGPIO::BTN_DOWN;
+    }
+
+    if (keycode == device->simpleForwardKeycode) {
+      return HalGPIO::BTN_DOWN;
+    }
+
+    if (device->simpleBackKeycode == 0x00) {
+      device->simpleBackKeycode = keycode;
+      LOG_INF("BT", "Simple fallback learned BACK keycode 0x%02X", keycode);
+      return HalGPIO::BTN_UP;
+    }
+
+    if (keycode == device->simpleBackKeycode) {
+      return HalGPIO::BTN_UP;
+    }
+  }
+
   LOG_DBG("BT", "Unmapped keycode: 0x%02X (no profile)", keycode);
   return 0xFF;
 }

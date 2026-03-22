@@ -217,6 +217,7 @@ void enterDeepSleep() {
     auto& btMgr = BluetoothHIDManager::getInstance();
     if (btMgr.isEnabled()) {
       LOG_INF("SLP", "Disabling Bluetooth before deep sleep");
+      HalPowerManager::Lock lock;
       btMgr.disable();
     }
   } catch (...) {
@@ -437,10 +438,12 @@ void loop() {
   gpio.update();
   const bool userInputDetected = gpio.wasAnyPressed() || gpio.wasAnyReleased();
   bool bleRecentActivity = false;
+  bool bleEnabled = false;
 
   // Check for Bluetooth inactivity timeouts and auto-reconnect
   try {
     auto& btMgr = BluetoothHIDManager::getInstance();
+    bleEnabled = btMgr.isEnabled();
     btMgr.updateActivity();
     btMgr.checkAutoReconnect(userInputDetected);
     bleRecentActivity = btMgr.hasRecentActivity();
@@ -530,11 +533,14 @@ void loop() {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
-    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
+    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS && !bleEnabled) {
       // If we've been inactive for a while, increase the delay to save power
       powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
       delay(50);
     } else {
+      if (bleEnabled) {
+        powerManager.setPowerSaving(false);
+      }
       // Short delay to prevent tight loop while still being responsive
       delay(10);
     }
