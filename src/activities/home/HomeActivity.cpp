@@ -591,9 +591,9 @@ void HomeActivity::render(Activity::RenderLock&&) {
     renderer.drawRoundedRect(previewX + 2, topCardsY + 2, cardWidth - 4, topCardHeight - 4, 1, 7, true);
   }
 
-  // Right column split: recent books card on top, pet card beneath it
+  // Right column split: recent books card on top (60%), pet card beneath (40%)
   constexpr int rightColumnGap = 10;
-  const int recentCardHeight = (topCardHeight - rightColumnGap) / 2;
+  const int recentCardHeight = (topCardHeight - rightColumnGap) * 3 / 5;
   const int petCardHeight = topCardHeight - rightColumnGap - recentCardHeight;
 
   // Right top card: recent books + progress bars
@@ -610,27 +610,63 @@ void HomeActivity::render(Activity::RenderLock&&) {
   renderer.drawText(UI_12_FONT_ID, recentX + 10, topCardsY + 8, recentsHeader.c_str(), true, EpdFontFamily::BOLD);
 
   const int listTop = topCardsY + 8 + renderer.getLineHeight(UI_12_FONT_ID) + 6;
-  const int rowCount = 4;
-  const int rowHeight = std::max(renderer.getLineHeight(SMALL_FONT_ID),
-                                 (recentCardHeight - (listTop - topCardsY) - 8) / rowCount);
+  const int titleLineH = renderer.getLineHeight(SMALL_FONT_ID);
+  constexpr int progressBarH = 3;
+  constexpr int rowItemGap = 3;
+  const int rowUnit = titleLineH * 2 + progressBarH + rowItemGap;
+  const int listAvail = recentCardHeight - (listTop - topCardsY) - 8;
+  const int rowCount = std::min(4, std::max(1, listAvail / rowUnit));
 
   for (int row = 0; row < rowCount; ++row) {
-    const int rowY = listTop + row * rowHeight;
-    if (rowY + renderer.getLineHeight(SMALL_FONT_ID) > topCardsY + recentCardHeight - 4) {
+    const int rowY = listTop + row * rowUnit;
+    if (rowY + titleLineH > topCardsY + recentCardHeight - 4) {
       break;
     }
 
     if (row < static_cast<int>(recentBooks.size())) {
       const RecentBook& book = recentBooks[row];
       const int progress = getRecentBookProgressPercent(book);
-      std::string bookTitle = renderer.truncatedText(SMALL_FONT_ID, book.title.c_str(), cardWidth - 58);
+      const int titleAvailW = cardWidth - 20;
 
-      renderer.drawText(SMALL_FONT_ID, recentX + 10, rowY, bookTitle.c_str(), true);
+      // Two-line title: wrap at word boundary if the full title does not fit
+      std::string line1, line2;
+      if (renderer.getTextWidth(SMALL_FONT_ID, book.title.c_str()) <= titleAvailW) {
+        line1 = book.title;
+      } else {
+        // Find how many characters fit on line 1
+        size_t fitsLen = 0;
+        for (size_t len = 1; len <= book.title.size(); ++len) {
+          if (renderer.getTextWidth(SMALL_FONT_ID, book.title.substr(0, len).c_str()) > titleAvailW) break;
+          fitsLen = len;
+        }
+        // Split at the last space within the fitting portion for a clean word wrap
+        const size_t spacePos = book.title.rfind(' ', fitsLen > 0 ? fitsLen - 1 : 0);
+        if (spacePos != std::string::npos && spacePos > 0) {
+          line1 = book.title.substr(0, spacePos);
+          const std::string rest = book.title.substr(spacePos + 1);
+          line2 = renderer.truncatedText(SMALL_FONT_ID, rest.c_str(), titleAvailW);
+        } else {
+          line1 = renderer.truncatedText(SMALL_FONT_ID, book.title.c_str(), titleAvailW);
+        }
+      }
 
-      char progressText[8];
-      snprintf(progressText, sizeof(progressText), "%d%%", progress);
-      const int progressW = renderer.getTextWidth(SMALL_FONT_ID, progressText);
-      renderer.drawText(SMALL_FONT_ID, recentX + cardWidth - 10 - progressW, rowY, progressText, true);
+      renderer.drawText(SMALL_FONT_ID, recentX + 10, rowY, line1.c_str(), true);
+      if (!line2.empty() && rowY + titleLineH + titleLineH <= topCardsY + recentCardHeight - 4) {
+        renderer.drawText(SMALL_FONT_ID, recentX + 10, rowY + titleLineH, line2.c_str(), true);
+      }
+
+      // Progress bar below the two-line title area
+      const int barY = rowY + titleLineH * 2 + 1;
+      const int barX = recentX + 10;
+      const int barW = cardWidth - 20;
+      if (barY + progressBarH <= topCardsY + recentCardHeight - 4) {
+        renderer.fillRect(barX, barY, barW, progressBarH, false);
+        renderer.drawRect(barX, barY, barW, progressBarH, true);
+        if (progress > 0) {
+          const int fillW = std::max(1, (barW - 2) * progress / 100);
+          renderer.fillRect(barX + 1, barY + 1, fillW, progressBarH - 2, true);
+        }
+      }
     } else {
       renderer.drawText(SMALL_FONT_ID, recentX + 10, rowY, "-", true);
     }

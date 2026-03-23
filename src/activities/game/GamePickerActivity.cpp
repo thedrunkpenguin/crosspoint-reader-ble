@@ -5,19 +5,11 @@
 
 #include <vector>
 
-#include "CaroActivity.h"
-#include "ChessActivity.h"
-#include "GameOfLifeActivity.h"
 #include "MappedInputManager.h"
-#include "MazeGameActivity.h"
-#include "MinesweeperActivity.h"
-#include "SnakeActivity.h"
-#include "SudokuActivity.h"
-#include "TwentyFortyEightActivity.h"
 #include "components/UITheme.h"
 
 int GamePickerActivity::gameCount() const {
-  return 9;
+  return 1;
 }
 
 void GamePickerActivity::onEnter() {
@@ -39,30 +31,6 @@ void GamePickerActivity::openSelectedGame() {
       if (onStartDeepMines) {
         onStartDeepMines();
       }
-      break;
-    case 1:
-      enterNewActivity(new SnakeActivity(renderer, mappedInput, onExitToPicker));
-      break;
-    case 2:
-      enterNewActivity(new TwentyFortyEightActivity(renderer, mappedInput, onExitToPicker));
-      break;
-    case 3:
-      enterNewActivity(new MazeGameActivity(renderer, mappedInput, onExitToPicker));
-      break;
-    case 4:
-      enterNewActivity(new GameOfLifeActivity(renderer, mappedInput, onExitToPicker));
-      break;
-    case 5:
-      enterNewActivity(new ChessActivity(renderer, mappedInput, onExitToPicker));
-      break;
-    case 6:
-      enterNewActivity(new CaroActivity(renderer, mappedInput, onExitToPicker));
-      break;
-    case 7:
-      enterNewActivity(new SudokuActivity(renderer, mappedInput, onExitToPicker));
-      break;
-    case 8:
-      enterNewActivity(new MinesweeperActivity(renderer, mappedInput, onExitToPicker));
       break;
     default:
       break;
@@ -113,9 +81,7 @@ void GamePickerActivity::render(Activity::RenderLock&&) {
 
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_GAMES));
 
-  static const StrId gameIds[] = {
-      StrId::STR_DEEP_MINES, StrId::STR_SNAKE, StrId::STR_2048, StrId::STR_MAZE, StrId::STR_GAME_OF_LIFE,
-      StrId::STR_CHESS, StrId::STR_CARO, StrId::STR_SUDOKU, StrId::STR_MINESWEEPER};
+  static const StrId gameIds[] = {StrId::STR_DEEP_MINES};
 
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;

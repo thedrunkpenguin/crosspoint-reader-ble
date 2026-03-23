@@ -1,6 +1,7 @@
 #include "PetPersistence.h"
 
 #include <HalStorage.h>
+#include <HardwareSerial.h>
 
 #include "Serialization.h"
 
@@ -14,8 +15,10 @@ namespace pet {
 bool loadState(PetState& state) {
   FsFile f;
   if (!Storage.openFileForRead("PET", kPetStatePath, f)) {
+    Serial.printf("[PET] No save file found at %s - starting fresh\n", kPetStatePath);
     return false;
   }
+  Serial.printf("[PET] Loading pet state from %s\n", kPetStatePath);
 
   state = PetState{};
 
@@ -76,18 +79,23 @@ bool loadState(PetState& state) {
   if (state.stage == PetStage::Dead) {
     state.alive = false;
   }
+  Serial.printf("[PET] Pet state loaded (alive=%d stage=%d hunger=%d)\n",
+                static_cast<int>(state.alive), static_cast<int>(state.stage),
+                static_cast<int>(state.hunger));
   return true;
 }
 
 bool saveState(const PetState& state) {
-  if (!Storage.exists(kPetDir)) {
-    Storage.mkdir(kPetDir);
-  }
+  Storage.mkdir(kPetDir);
 
   FsFile f;
   if (!Storage.openFileForWrite("PET", kPetStatePath, f)) {
+    Serial.printf("[%lu] [PET] ERROR: Failed to open save file for writing\n", millis());
     return false;
   }
+  Serial.printf("[PET] Saving pet state (alive=%d stage=%d hunger=%d)\n",
+                static_cast<int>(state.alive), static_cast<int>(state.stage),
+                static_cast<int>(state.hunger));
 
   serialization::writePod(f, state.initialized);
   serialization::writePod(f, state.alive);
@@ -136,6 +144,7 @@ bool saveState(const PetState& state) {
   serialization::writePod(f, state.streakTier);
 
   f.close();
+  Serial.printf("[PET] Pet state saved successfully\n");
   return true;
 }
 

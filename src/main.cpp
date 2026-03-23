@@ -11,6 +11,7 @@
 #include <SPI.h>
 #include <builtinFonts/all.h>
 #include <BluetoothHIDManager.h>
+#include <esp_system.h>
 
 #include <cstring>
 
@@ -290,7 +291,7 @@ void onGoToPet() {
 
 void onStartGame() {
   if (!GAME_STATE.hasSaveFile()) {
-    GAME_STATE.newGame(static_cast<uint32_t>(millis()) ^ 0xDEADBEEF);
+    GAME_STATE.newGame(esp_random());
   }
   exitActivity();
   enterNewActivity(new GameActivity(renderer, mappedInputManager, onGoToGame));
