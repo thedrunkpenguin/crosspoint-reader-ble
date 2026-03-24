@@ -24,6 +24,9 @@ namespace {
 constexpr uint8_t SETTINGS_FILE_VERSION = 1;
 // SETTINGS_COUNT is now calculated automatically in saveToFile
 constexpr char SETTINGS_FILE[] = "/.crosspoint/settings.bin";
+constexpr char SETTINGS_FILE_BACKUP[] = "/.crosspoint/settings.bak";
+// Old valid settings files still had many fields; very small counts usually indicate corruption.
+constexpr uint8_t SETTINGS_FILE_MIN_ITEM_COUNT = 14;
 
 // Validate front button mapping to ensure each hardware button is unique.
 // If duplicates are detected, reset to the default physical order to prevent invalid mappings.
@@ -146,152 +149,186 @@ bool CrossPointSettings::saveToFile() const {
   // Make sure the directory exists
   Storage.mkdir("/.crosspoint");
 
-  FsFile outputFile;
-  if (!Storage.openFileForWrite("CPS", SETTINGS_FILE, outputFile)) {
+  auto writeOneFile = [&](const char* path) {
+    FsFile outputFile;
+    if (!Storage.openFileForWrite("CPS", path, outputFile)) {
+      LOG_ERR("CPS", "Failed to open settings file for write: %s", path);
+      return false;
+    }
+
+    uint8_t item_count = writeSettings(outputFile, true);  // Count pass
+    serialization::writePod(outputFile, SETTINGS_FILE_VERSION);
+    serialization::writePod(outputFile, static_cast<uint8_t>(item_count));
+    writeSettings(outputFile);  // Data pass
+
+    outputFile.close();
+    return true;
+  };
+
+  // Write backup first, then primary. If reboot happens mid-write, one valid copy usually remains.
+  const bool backupOk = writeOneFile(SETTINGS_FILE_BACKUP);
+  const bool primaryOk = writeOneFile(SETTINGS_FILE);
+
+  if (!primaryOk) {
     return false;
   }
 
-  // First pass: count the items
-  uint8_t item_count = writeSettings(outputFile, true);  // This will just count, not write
+  if (!backupOk) {
+    LOG_ERR("CPS", "Primary settings saved, but backup write failed");
+  }
 
-  // Write header
-  serialization::writePod(outputFile, SETTINGS_FILE_VERSION);
-  serialization::writePod(outputFile, static_cast<uint8_t>(item_count));
-  // Second pass: actually write the settings
-  writeSettings(outputFile);  // This will write the actual data
-
-  outputFile.close();
-
-  LOG_DBG("CPS", "Settings saved to file");
+  LOG_DBG("CPS", "Settings saved to primary + backup");
   return true;
 }
 
 bool CrossPointSettings::loadFromFile() {
-  FsFile inputFile;
-  if (!Storage.openFileForRead("CPS", SETTINGS_FILE, inputFile)) {
-    return false;
-  }
+  auto loadOneFile = [&](const char* path) {
+    FsFile inputFile;
+    if (!Storage.openFileForRead("CPS", path, inputFile)) {
+      return false;
+    }
 
-  uint8_t version;
-  serialization::readPod(inputFile, version);
-  if (version != SETTINGS_FILE_VERSION) {
-    LOG_ERR("CPS", "Deserialization failed: Unknown version %u", version);
+    uint8_t version;
+    serialization::readPod(inputFile, version);
+    if (version != SETTINGS_FILE_VERSION) {
+      LOG_ERR("CPS", "Deserialization failed for %s: Unknown version %u", path, version);
+      inputFile.close();
+      return false;
+    }
+
+    uint8_t fileSettingsCount = 0;
+    serialization::readPod(inputFile, fileSettingsCount);
+
+    FsFile unused;
+    const uint8_t maxSettingsCount = writeSettings(unused, true);
+    if (fileSettingsCount < SETTINGS_FILE_MIN_ITEM_COUNT || fileSettingsCount > maxSettingsCount) {
+      LOG_ERR("CPS", "Deserialization failed for %s: Invalid item count %u (expected %u..%u)", path,
+              fileSettingsCount, SETTINGS_FILE_MIN_ITEM_COUNT, maxSettingsCount);
+      inputFile.close();
+      return false;
+    }
+
+    uint8_t settingsRead = 0;
+    bool frontButtonMappingRead = false;
+    do {
+      readAndValidate(inputFile, sleepScreen, SLEEP_SCREEN_MODE_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, extraParagraphSpacing);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, shortPwrBtn, SHORT_PWRBTN_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, statusBar, STATUS_BAR_MODE_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, orientation, ORIENTATION_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, frontButtonLayout, FRONT_BUTTON_LAYOUT_COUNT);  // legacy
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, sideButtonLayout, SIDE_BUTTON_LAYOUT_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, fontFamily, FONT_FAMILY_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, fontSize, FONT_SIZE_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, lineSpacing, LINE_COMPRESSION_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, paragraphAlignment, PARAGRAPH_ALIGNMENT_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, sleepTimeout, SLEEP_TIMEOUT_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, refreshFrequency, REFRESH_FREQUENCY_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, screenMargin);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, sleepScreenCoverMode, SLEEP_SCREEN_COVER_MODE_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      {
+        std::string urlStr;
+        serialization::readString(inputFile, urlStr);
+        strncpy(opdsServerUrl, urlStr.c_str(), sizeof(opdsServerUrl) - 1);
+        opdsServerUrl[sizeof(opdsServerUrl) - 1] = '\0';
+      }
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, textAntiAliasing);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, hideBatteryPercentage, HIDE_BATTERY_PERCENTAGE_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, longPressChapterSkip);
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, hyphenationEnabled);
+      if (++settingsRead >= fileSettingsCount) break;
+      {
+        std::string usernameStr;
+        serialization::readString(inputFile, usernameStr);
+        strncpy(opdsUsername, usernameStr.c_str(), sizeof(opdsUsername) - 1);
+        opdsUsername[sizeof(opdsUsername) - 1] = '\0';
+      }
+      if (++settingsRead >= fileSettingsCount) break;
+      {
+        std::string passwordStr;
+        serialization::readString(inputFile, passwordStr);
+        strncpy(opdsPassword, passwordStr.c_str(), sizeof(opdsPassword) - 1);
+        opdsPassword[sizeof(opdsPassword) - 1] = '\0';
+      }
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, sleepScreenCoverFilter, SLEEP_SCREEN_COVER_FILTER_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, uiTheme);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, frontButtonBack, FRONT_BUTTON_HARDWARE_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, frontButtonConfirm, FRONT_BUTTON_HARDWARE_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, frontButtonLeft, FRONT_BUTTON_HARDWARE_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, frontButtonRight, FRONT_BUTTON_HARDWARE_COUNT);
+      frontButtonMappingRead = true;
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, fadingFix);
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, embeddedStyle);
+      if (++settingsRead >= fileSettingsCount) break;
+      {
+        std::string addrStr;
+        serialization::readString(inputFile, addrStr);
+        strncpy(bleBondedDeviceAddr, addrStr.c_str(), sizeof(bleBondedDeviceAddr) - 1);
+        bleBondedDeviceAddr[sizeof(bleBondedDeviceAddr) - 1] = '\0';
+      }
+      if (++settingsRead >= fileSettingsCount) break;
+      {
+        std::string nameStr;
+        serialization::readString(inputFile, nameStr);
+        strncpy(bleBondedDeviceName, nameStr.c_str(), sizeof(bleBondedDeviceName) - 1);
+        bleBondedDeviceName[sizeof(bleBondedDeviceName) - 1] = '\0';
+      }
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, bleBondedDeviceAddrType, 2);
+      if (++settingsRead >= fileSettingsCount) break;
+    } while (false);
+
+    if (frontButtonMappingRead) {
+      validateFrontButtonMapping(*this);
+    } else {
+      applyLegacyFrontButtonLayout(*this);
+    }
+
     inputFile.close();
-    return false;
+    LOG_DBG("CPS", "Settings loaded from %s", path);
+    return true;
+  };
+
+  if (loadOneFile(SETTINGS_FILE)) {
+    return true;
   }
 
-  uint8_t fileSettingsCount = 0;
-  serialization::readPod(inputFile, fileSettingsCount);
-
-  // load settings that exist (support older files with fewer fields)
-  uint8_t settingsRead = 0;
-  // Track whether remap fields were present in the settings file.
-  bool frontButtonMappingRead = false;
-  do {
-    readAndValidate(inputFile, sleepScreen, SLEEP_SCREEN_MODE_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    serialization::readPod(inputFile, extraParagraphSpacing);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, shortPwrBtn, SHORT_PWRBTN_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, statusBar, STATUS_BAR_MODE_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, orientation, ORIENTATION_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, frontButtonLayout, FRONT_BUTTON_LAYOUT_COUNT);  // legacy
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, sideButtonLayout, SIDE_BUTTON_LAYOUT_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, fontFamily, FONT_FAMILY_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, fontSize, FONT_SIZE_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, lineSpacing, LINE_COMPRESSION_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, paragraphAlignment, PARAGRAPH_ALIGNMENT_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, sleepTimeout, SLEEP_TIMEOUT_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, refreshFrequency, REFRESH_FREQUENCY_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    serialization::readPod(inputFile, screenMargin);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, sleepScreenCoverMode, SLEEP_SCREEN_COVER_MODE_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    {
-      std::string urlStr;
-      serialization::readString(inputFile, urlStr);
-      strncpy(opdsServerUrl, urlStr.c_str(), sizeof(opdsServerUrl) - 1);
-      opdsServerUrl[sizeof(opdsServerUrl) - 1] = '\0';
-    }
-    if (++settingsRead >= fileSettingsCount) break;
-    serialization::readPod(inputFile, textAntiAliasing);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, hideBatteryPercentage, HIDE_BATTERY_PERCENTAGE_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    serialization::readPod(inputFile, longPressChapterSkip);
-    if (++settingsRead >= fileSettingsCount) break;
-    serialization::readPod(inputFile, hyphenationEnabled);
-    if (++settingsRead >= fileSettingsCount) break;
-    {
-      std::string usernameStr;
-      serialization::readString(inputFile, usernameStr);
-      strncpy(opdsUsername, usernameStr.c_str(), sizeof(opdsUsername) - 1);
-      opdsUsername[sizeof(opdsUsername) - 1] = '\0';
-    }
-    if (++settingsRead >= fileSettingsCount) break;
-    {
-      std::string passwordStr;
-      serialization::readString(inputFile, passwordStr);
-      strncpy(opdsPassword, passwordStr.c_str(), sizeof(opdsPassword) - 1);
-      opdsPassword[sizeof(opdsPassword) - 1] = '\0';
-    }
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, sleepScreenCoverFilter, SLEEP_SCREEN_COVER_FILTER_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    serialization::readPod(inputFile, uiTheme);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, frontButtonBack, FRONT_BUTTON_HARDWARE_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, frontButtonConfirm, FRONT_BUTTON_HARDWARE_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, frontButtonLeft, FRONT_BUTTON_HARDWARE_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, frontButtonRight, FRONT_BUTTON_HARDWARE_COUNT);
-    frontButtonMappingRead = true;
-    if (++settingsRead >= fileSettingsCount) break;
-    serialization::readPod(inputFile, fadingFix);
-    if (++settingsRead >= fileSettingsCount) break;
-    serialization::readPod(inputFile, embeddedStyle);
-    if (++settingsRead >= fileSettingsCount) break;
-    // New fields added at end for backward compatibility
-    {
-      std::string addrStr;
-      serialization::readString(inputFile, addrStr);
-      strncpy(bleBondedDeviceAddr, addrStr.c_str(), sizeof(bleBondedDeviceAddr) - 1);
-      bleBondedDeviceAddr[sizeof(bleBondedDeviceAddr) - 1] = '\0';
-    }
-    if (++settingsRead >= fileSettingsCount) break;
-    {
-      std::string nameStr;
-      serialization::readString(inputFile, nameStr);
-      strncpy(bleBondedDeviceName, nameStr.c_str(), sizeof(bleBondedDeviceName) - 1);
-      bleBondedDeviceName[sizeof(bleBondedDeviceName) - 1] = '\0';
-    }
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, bleBondedDeviceAddrType, 2);
-    if (++settingsRead >= fileSettingsCount) break;
-  } while (false);
-
-  if (frontButtonMappingRead) {
-    validateFrontButtonMapping(*this);
-  } else {
-    applyLegacyFrontButtonLayout(*this);
+  LOG_ERR("CPS", "Primary settings load failed; attempting backup");
+  if (loadOneFile(SETTINGS_FILE_BACKUP)) {
+    saveToFile();
+    LOG_INF("CPS", "Recovered settings from backup and restored primary file");
+    return true;
   }
 
-  inputFile.close();
-  LOG_DBG("CPS", "Settings loaded from file");
-  return true;
+  LOG_ERR("CPS", "Both primary and backup settings files failed to load");
+  return false;
 }
 
 float CrossPointSettings::getReaderLineCompression() const {
