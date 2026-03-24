@@ -10,13 +10,11 @@
 
 namespace {
 constexpr int CARD_GAP_X = 4;
-constexpr int CARD_OVERLAP_Y = 12;
+constexpr int CARD_OVERLAP_Y = 8;
 }
 
-bool SolitaireActivity::isAdjacentRank(uint8_t a, uint8_t b) {
-  if (a == 0 || b == 0) return false;
-  if ((a == 1 && b == 13) || (a == 13 && b == 1)) return true;
-  return (a + 1 == b) || (b + 1 == a);
+bool SolitaireActivity::isRed(uint8_t suit) {
+  return suit == 0 || suit == 1;  // Hearts=0, Diamonds=1
 }
 
 const char* SolitaireActivity::rankText(uint8_t rank) {
@@ -24,10 +22,11 @@ const char* SolitaireActivity::rankText(uint8_t rank) {
   return (rank <= 13) ? kRanks[rank] : "?";
 }
 
-const char* SolitaireActivity::suitText(uint8_t suit) {
-  static const char* kSuits[] = {"H", "D", "C", "S"};
-  return (suit < 4) ? kSuits[suit] : "?";
+const char* SolitaireActivity::suitSymbol(uint8_t suit) {
+  static const char* kSymbols[] = {"♥", "♦", "♣", "♠"};
+  return (suit < 4) ? kSymbols[suit] : "?";
 }
+
 
 void SolitaireActivity::shuffleDeck(std::array<Card, 52>& deck) {
   for (int i = 51; i > 0; --i) {
@@ -37,6 +36,17 @@ void SolitaireActivity::shuffleDeck(std::array<Card, 52>& deck) {
 }
 
 void SolitaireActivity::startNewGame() {
+  // Clear all data structures
+  for (int i = 0; i < TABLEAU_COUNT; ++i) {
+    tableau[i].clear();
+  }
+  for (int i = 0; i < FOUNDATION_COUNT; ++i) {
+    foundation[i] = Card{0, 0};
+  }
+  stock.clear();
+  waste.clear();
+
+  // Create and shuffle deck
   std::array<Card, 52> deck{};
   int index = 0;
   for (uint8_t suit = 0; suit < 4; ++suit) {
@@ -44,69 +54,73 @@ void SolitaireActivity::startNewGame() {
       deck[index++] = Card{rank, suit};
     }
   }
-
   shuffleDeck(deck);
 
+  // Deal to tableau: column 0 gets 1 card, column 1 gets 2 cards, etc.
   index = 0;
-  for (int column = 0; column < COLUMN_COUNT; ++column) {
-    tableauCounts[column] = CARDS_PER_COLUMN;
-    for (int row = 0; row < CARDS_PER_COLUMN; ++row) {
-      tableau[column][row] = deck[index++];
+  for (int column = 0; column < TABLEAU_COUNT; ++column) {
+    for (int row = 0; row <= column; ++row) {
+      tableau[column].push_back(deck[index++]);
     }
   }
 
-  waste = deck[index++];
-  stockCount = 0;
-  while (index < 52 && stockCount < stock.size()) {
-    stock[stockCount++] = deck[index++];
+  // Remaining cards go to stock
+  while (index < 52) {
+    stock.push_back(deck[index++]);
   }
 
   selectedColumn = 0;
+  selectionMode = 0;  // Start at tableau
   gameWon = false;
   gameLost = false;
   updateEndState();
 }
 
-bool SolitaireActivity::canPlayColumn(int column) const {
-  if (column < 0 || column >= COLUMN_COUNT) return false;
-  if (tableauCounts[column] == 0) return false;
-  const Card& card = tableau[column][tableauCounts[column] - 1];
-  return isAdjacentRank(card.rank, waste.rank);
+bool SolitaireActivity::canMoveToTableau(const Card& card, int column) const {
+  if (column < 0 || column >= TABLEAU_COUNT) return false;
+  if (tableau[column].empty()) {
+    // Empty column can accept King
+    return card.rank == 13;
+  }
+  // Target must be one rank higher and opposite color
+  const Card& target = tableau[column].back();
+  return (card.rank + 1 == target.rank) && (isRed(card.suit) != isRed(target.suit));
 }
 
-bool SolitaireActivity::playColumn(int column) {
-  if (!canPlayColumn(column)) return false;
-  waste = tableau[column][tableauCounts[column] - 1];
-  tableauCounts[column]--;
-  updateEndState();
-  return true;
+bool SolitaireActivity::canMoveToFoundation(const Card& card) const {
+  if (card.rank == 0) return false;
+  const Card& f = foundation[card.suit];
+  return (f.rank == 0 && card.rank == 1) || (f.rank + 1 == card.rank);
 }
 
-bool SolitaireActivity::drawFromStock() {
-  if (stockCount == 0) return false;
-  waste = stock[stockCount - 1];
-  stockCount--;
-  updateEndState();
-  return true;
-}
-
-bool SolitaireActivity::hasPlayableColumn() const {
-  for (int column = 0; column < COLUMN_COUNT; ++column) {
-    if (canPlayColumn(column)) return true;
+bool SolitaireActivity::tryAutoMove() {
+  // Try to move waste to foundation
+  if (!waste.empty()) {
+    const Card& card = waste.back();
+    if (canMoveToFoundation(card)) {
+      foundation[card.suit] = card;
+      waste.pop_back();
+      return true;
+    }
+  }
+  // Try to move from tableau to foundation
+  for (int i = 0; i < TABLEAU_COUNT; ++i) {
+    if (!tableau[i].empty()) {
+      const Card& card = tableau[i].back();
+      if (canMoveToFoundation(card)) {
+        foundation[card.suit] = card;
+        tableau[i].pop_back();
+        return true;
+      }
+    }
   }
   return false;
 }
 
-int SolitaireActivity::remainingCards() const {
-  int total = stockCount;
-  for (uint8_t count : tableauCounts) total += count;
-  return total;
-}
-
 void SolitaireActivity::updateEndState() {
   gameWon = true;
-  for (uint8_t count : tableauCounts) {
-    if (count != 0) {
+  for (int i = 0; i < FOUNDATION_COUNT; ++i) {
+    if (foundation[i].rank != 13) {
       gameWon = false;
       break;
     }
@@ -117,8 +131,30 @@ void SolitaireActivity::updateEndState() {
     return;
   }
 
-  gameLost = (stockCount == 0 && !hasPlayableColumn());
+  // Check if lost: stock empty, waste empty or top card can't move, no tableau columns have playable cards
+  if (stock.empty() && waste.empty()) {
+    bool canMove = false;
+    for (int i = 0; i < TABLEAU_COUNT; ++i) {
+      if (!tableau[i].empty()) {
+        const Card& card = tableau[i].back();
+        if (canMoveToFoundation(card)) {
+          canMove = true;
+          break;
+        }
+        for (int j = 0; j < TABLEAU_COUNT; ++j) {
+          if (i != j && canMoveToTableau(card, j)) {
+            canMove = true;
+            break;
+          }
+        }
+      }
+    }
+    gameLost = !canMove;
+  } else {
+    gameLost = false;
+  }
 }
+
 
 void SolitaireActivity::drawCard(int x, int y, int w, int h, const Card& card, bool selected, bool faceDown) {
   renderer.fillRoundedRect(x, y, w, h, 6, faceDown ? Color::LightGray : Color::White);
@@ -134,13 +170,14 @@ void SolitaireActivity::drawCard(int x, int y, int w, int h, const Card& card, b
     return;
   }
 
+  // Draw rank and suit symbol
   char label[8];
-  snprintf(label, sizeof(label), "%s%s", rankText(card.rank), suitText(card.suit));
-  renderer.drawText(UI_10_FONT_ID, x + 6, y + 6, label, true, EpdFontFamily::BOLD);
-  const int centerW = renderer.getTextWidth(UI_12_FONT_ID, label, EpdFontFamily::BOLD);
-  renderer.drawText(UI_12_FONT_ID, x + (w - centerW) / 2, y + (h - renderer.getLineHeight(UI_12_FONT_ID)) / 2, label,
-                    true, EpdFontFamily::BOLD);
+  snprintf(label, sizeof(label), "%s%s", rankText(card.rank), suitSymbol(card.suit));
+  
+  bool isCardRed = isRed(card.suit);
+  renderer.drawText(UI_10_FONT_ID, x + 6, y + 6, label, isCardRed);
 }
+
 
 void SolitaireActivity::onEnter() {
   Activity::onEnter();
@@ -162,32 +199,66 @@ void SolitaireActivity::loop() {
     return;
   }
 
+  // Try auto-move first
+  if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+    while (tryAutoMove()) {
+      // Keep auto-moving
+    }
+    requestUpdate();
+    return;
+  }
+
+  // Navigate between tableau columns
   if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-    selectedColumn = (selectedColumn - 1 + COLUMN_COUNT) % COLUMN_COUNT;
+    selectedColumn = (selectedColumn - 1 + TABLEAU_COUNT) % TABLEAU_COUNT;
+    selectionMode = 0;
     requestUpdate();
     return;
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-    selectedColumn = (selectedColumn + 1) % COLUMN_COUNT;
+    selectedColumn = (selectedColumn + 1) % TABLEAU_COUNT;
+    selectionMode = 0;
     requestUpdate();
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Up) ||
-      mappedInput.wasReleased(MappedInputManager::Button::Down)) {
-    if (drawFromStock()) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+    // Draw from stock
+    if (!stock.empty()) {
+      waste.push_back(stock.back());
+      stock.pop_back();
       requestUpdate();
     }
     return;
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (playColumn(selectedColumn)) {
-      requestUpdate();
+    // Move selected tableau card to foundation
+    if (!tableau[selectedColumn].empty()) {
+      Card card = tableau[selectedColumn].back();
+      if (canMoveToFoundation(card)) {
+        foundation[card.suit] = card;
+        tableau[selectedColumn].pop_back();
+        updateEndState();
+        requestUpdate();
+      } else {
+        // Try to move to another tableau column
+        for (int i = 0; i < TABLEAU_COUNT; ++i) {
+          if (i != selectedColumn && canMoveToTableau(card, i)) {
+            tableau[i].push_back(card);
+            tableau[selectedColumn].pop_back();
+            updateEndState();
+            requestUpdate();
+            return;
+          }
+        }
+      }
     }
   }
 }
+
+
 
 void SolitaireActivity::render(Activity::RenderLock&&) {
   renderer.clearScreen();
@@ -196,75 +267,90 @@ void SolitaireActivity::render(Activity::RenderLock&&) {
   const int pageWidth = renderer.getScreenWidth();
   const int pageHeight = renderer.getScreenHeight();
   const int sidePadding = 12;
-  const int cardW = std::max(32, (pageWidth - sidePadding * 2 - CARD_GAP_X * (COLUMN_COUNT - 1)) / COLUMN_COUNT);
-  const int cardH = std::max(42, (cardW * 13) / 10);
-  const int columnOverlap = std::max(8, cardH / 5);
-
+  
+  // Draw header
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, "Solitaire");
 
-  const int top = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  renderer.drawCenteredText(UI_10_FONT_ID, top, "Golf Solitaire: play one rank up or down.");
-  renderer.drawCenteredText(UI_10_FONT_ID, top + 14, "Up/Down draws from stock.");
-
-  const int topCardsY = top + 28;
+  // Top cards area with proper padding
+  const int topStartY = metrics.topPadding + metrics.headerHeight + 8;
+  const int cardW = 36;
+  const int cardH = 48;
+  
+  // Stock pile
   const int stockX = sidePadding;
-  drawCard(stockX, topCardsY, cardW, cardH, Card{}, false, true);
-  char stockText[20];
-  snprintf(stockText, sizeof(stockText), "Stock %u", stockCount);
-  const int stockTextW = renderer.getTextWidth(UI_10_FONT_ID, stockText);
-  renderer.drawText(UI_10_FONT_ID, stockX + (cardW - stockTextW) / 2, topCardsY + cardH + 8, stockText);
-
+  drawCard(stockX, topStartY, cardW, cardH, Card{}, false, !stock.empty());
+  const int stockTextW = renderer.getTextWidth(UI_10_FONT_ID, "Stock");
+  renderer.drawText(UI_10_FONT_ID, stockX + (cardW - stockTextW) / 2, topStartY + cardH + 4, "Stock");
+  
+  // Waste pile
   const int wasteX = stockX + cardW + 16;
-  drawCard(wasteX, topCardsY, cardW, cardH, waste, false);
-  const char* wasteLabel = "Waste";
-  const int wasteTextW = renderer.getTextWidth(UI_10_FONT_ID, wasteLabel, EpdFontFamily::BOLD);
-  renderer.drawText(UI_10_FONT_ID, wasteX + (cardW - wasteTextW) / 2, topCardsY + cardH + 8, wasteLabel, true,
-                    EpdFontFamily::BOLD);
-
-  char remainText[24];
-  snprintf(remainText, sizeof(remainText), "Remaining %d", remainingCards());
-  renderer.drawText(UI_10_FONT_ID, wasteX + cardW + 16, topCardsY + 10, remainText, true, EpdFontFamily::BOLD);
-
-  if (!gameWon && !gameLost) {
-    renderer.drawText(UI_10_FONT_ID, wasteX + cardW + 16, topCardsY + 34,
-                      canPlayColumn(selectedColumn) ? "Selected column is playable" : "Draw or pick another column",
-                      true);
+  if (!waste.empty()) {
+    drawCard(wasteX, topStartY, cardW, cardH, waste.back(), false);
+  } else {
+    renderer.drawRoundedRect(wasteX, topStartY, cardW, cardH, 1, 6, true);
+  }
+  const int wasteTextW = renderer.getTextWidth(UI_10_FONT_ID, "Waste");
+  renderer.drawText(UI_10_FONT_ID, wasteX + (cardW - wasteTextW) / 2, topStartY + cardH + 4, "Waste");
+  
+  // Foundation piles (4 columns for each suit)
+  const int foundationStartX = wasteX + cardW + 32;
+  for (int i = 0; i < FOUNDATION_COUNT; ++i) {
+    const int fx = foundationStartX + i * (cardW + 8);
+    if (foundation[i].rank == 0) {
+      renderer.drawRoundedRect(fx, topStartY, cardW, cardH, 1, 6, true);
+      const char* suit = suitSymbol(i);
+      const int suitW = renderer.getTextWidth(UI_10_FONT_ID, suit);
+      renderer.drawText(UI_10_FONT_ID, fx + (cardW - suitW) / 2, topStartY + cardH / 2 - 6, suit);
+    } else {
+      drawCard(fx, topStartY, cardW, cardH, foundation[i], false);
+    }
   }
 
-  const int columnsWidth = COLUMN_COUNT * cardW + (COLUMN_COUNT - 1) * CARD_GAP_X;
-  const int startX = (pageWidth - columnsWidth) / 2;
-  const int columnsTop = topCardsY + cardH + 42;
+  // Tableau columns
+  const int tableauStartY = topStartY + cardH + 16;
+  const int tableauCardW = std::max(32, (pageWidth - sidePadding * 2 - CARD_GAP_X * (TABLEAU_COUNT - 1)) / TABLEAU_COUNT);
+  const int tableauCardH = std::max(40, (tableauCardW * 13) / 10);
+  const int columnOverlap = std::max(6, tableauCardH / 6);
 
-  for (int column = 0; column < COLUMN_COUNT; ++column) {
-    const int x = startX + column * (cardW + CARD_GAP_X);
+  const int tableauWidth = TABLEAU_COUNT * tableauCardW + (TABLEAU_COUNT - 1) * CARD_GAP_X;
+  const int tableauX = (pageWidth - tableauWidth) / 2;
 
-    for (int row = 0; row < tableauCounts[column]; ++row) {
-      const int y = columnsTop + row * columnOverlap;
-      const bool selected = (column == selectedColumn && row == tableauCounts[column] - 1);
-      drawCard(x, y, cardW, cardH, tableau[column][row], selected);
-    }
+  for (int column = 0; column < TABLEAU_COUNT; ++column) {
+    const int x = tableauX + column * (tableauCardW + CARD_GAP_X);
 
-    if (tableauCounts[column] == 0) {
-      renderer.drawRoundedRect(x, columnsTop, cardW, cardH, 1, 6, true);
-      if (column == selectedColumn) {
-        renderer.drawRoundedRect(x + 2, columnsTop + 2, cardW - 4, cardH - 4, 1, 5, true);
+    if (tableau[column].empty()) {
+      renderer.drawRoundedRect(x, tableauStartY, tableauCardW, tableauCardH, 1, 6, true);
+      if (column == selectedColumn && selectionMode == 0) {
+        renderer.drawRoundedRect(x + 2, tableauStartY + 2, tableauCardW - 4, tableauCardH - 4, 1, 5, true);
       }
-      const char* emptyLabel = "Empty";
+      const char* emptyLabel = "K";
       const int emptyW = renderer.getTextWidth(UI_10_FONT_ID, emptyLabel);
-      renderer.drawText(UI_10_FONT_ID, x + (cardW - emptyW) / 2, columnsTop + cardH / 2 - 6, emptyLabel);
+      renderer.drawText(UI_10_FONT_ID, x + (tableauCardW - emptyW) / 2, tableauStartY + tableauCardH / 2 - 6, emptyLabel, true);
+    } else {
+      // Draw all cards in column
+      for (size_t row = 0; row < tableau[column].size(); ++row) {
+        const int y = tableauStartY + static_cast<int>(row) * columnOverlap;
+        const bool isSelected = (column == selectedColumn && row == tableau[column].size() - 1 && selectionMode == 0);
+        drawCard(x, y, tableauCardW, tableauCardH, tableau[column][row], isSelected);
+      }
     }
   }
 
-  const int statusY = pageHeight - metrics.buttonHintsHeight - 34;
+  // Status bar
+  const int statusY = pageHeight - metrics.buttonHintsHeight - 40;
   if (gameWon) {
-    renderer.drawCenteredText(UI_12_FONT_ID, statusY, "You cleared the board.", true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_10_FONT_ID, statusY + 22, "Press Confirm for a new game.");
+    renderer.drawCenteredText(UI_12_FONT_ID, statusY, "You won!", true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_10_FONT_ID, statusY + 18, "Press Confirm for new game.");
   } else if (gameLost) {
     renderer.drawCenteredText(UI_12_FONT_ID, statusY, "No more moves.", true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_10_FONT_ID, statusY + 22, "Press Confirm for a new game.");
+    renderer.drawCenteredText(UI_10_FONT_ID, statusY + 18, "Press Confirm for new game.");
+  } else {
+    char remainText[24];
+    snprintf(remainText, sizeof(remainText), "Stock: %zu  Waste: %zu", stock.size(), waste.size());
+    renderer.drawCenteredText(UI_10_FONT_ID, statusY, remainText);
   }
 
-  const auto labels = mappedInput.mapLabels("Back", (gameWon || gameLost) ? "New game" : "Play", "Draw", "");
+  const auto labels = mappedInput.mapLabels("Back", (gameWon || gameLost) ? "New" : "Play", "Draw", "Auto");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }

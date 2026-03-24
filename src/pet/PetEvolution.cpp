@@ -29,7 +29,8 @@ void checkEvolution(PetState& state) {
   }
 
   const auto& req = PetConfig::EVOLUTION[stageIdx];
-  if (state.daysAtStage < req.minDays || state.totalPagesRead < req.minPages || state.hunger < req.minAvgHunger) {
+  const bool daysMet = (stageIdx == static_cast<uint8_t>(PetStage::Egg)) || (state.daysAtStage >= req.minDays);
+  if (!daysMet || state.totalPagesRead < req.minPages || state.hunger < req.minAvgHunger) {
     return;
   }
 

@@ -176,6 +176,12 @@ void GameActivity::openGameMenu() {
     updateRequired = true;
   };
 
+  auto onSave = [this] {
+    saveCurrentLevel();
+    GAME_STATE.saveToFile();
+    GAME_STATE.addMessage("Game saved.");
+  };
+
   auto onSaveQuit = [this] {
     saveCurrentLevel();
     GAME_STATE.saveToFile();
@@ -190,7 +196,7 @@ void GameActivity::openGameMenu() {
   };
 
   xSemaphoreTake(renderingMutex, portMAX_DELAY);
-  enterNewActivity(new GameMenuActivity(renderer, mappedInput, onResume, onSaveQuit, onAbandon));
+  enterNewActivity(new GameMenuActivity(renderer, mappedInput, onResume, onSave, onSaveQuit, onAbandon));
   xSemaphoreGive(renderingMutex);
 }
 

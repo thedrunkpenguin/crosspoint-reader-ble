@@ -29,6 +29,7 @@ class PetManager {
   void hatchNew(const char* name = nullptr, uint8_t type = 0);
   bool renamePet(const char* name);
   void changeType(uint8_t type);
+  bool resetPet();
 
   void tick();
 
@@ -61,6 +62,8 @@ class PetManager {
   uint32_t getDaysAlive() const;
   const char* getLastFeedback() const { return lastFeedback_; }
   void getMissions(PetMission out[3]) const;
+  uint8_t getPetLevel() const;
+  uint8_t getLevelProgressPercent() const;
 
  private:
   PetState state_;

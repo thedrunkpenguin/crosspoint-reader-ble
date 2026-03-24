@@ -32,6 +32,7 @@
 #include "components/icons/wifi_wide.h"
 #include "fontIds.h"
 #include "pet/PetManager.h"
+#include "pet/PetSpriteRenderer.h"
 #include "util/StringUtils.h"
 
 int HomeActivity::getMenuItemCount() const {
@@ -681,13 +682,17 @@ void HomeActivity::render(Activity::RenderLock&&) {
     renderer.drawRoundedRect(recentX + 2, petCardY + 2, cardWidth - 4, petCardHeight - 4, 1, 7, true);
   }
 
-  std::string petHeader = renderer.truncatedText(UI_12_FONT_ID, tr(STR_VIRTUAL_PET), cardWidth - 20, EpdFontFamily::BOLD);
+  PET_MANAGER.tick();
+  const auto& petState = PET_MANAGER.state();
+  const char* petHeaderLabel = tr(STR_VIRTUAL_PET);
+  if (petState.alive && petState.petName[0]) {
+    petHeaderLabel = petState.petName;
+  }
+  std::string petHeader = renderer.truncatedText(UI_12_FONT_ID, petHeaderLabel, cardWidth - 20, EpdFontFamily::BOLD);
   const int petHeaderW = renderer.getTextWidth(UI_12_FONT_ID, petHeader.c_str(), EpdFontFamily::BOLD);
   renderer.drawText(UI_12_FONT_ID, recentX + (cardWidth - petHeaderW) / 2, petCardY + 8, petHeader.c_str(), true,
                     EpdFontFamily::BOLD);
 
-  PET_MANAGER.tick();
-  const auto& petState = PET_MANAGER.state();
   const char* petMood = tr(STR_PET_NO_PET);
   if (petState.alive) {
     switch (petState.mood) {
@@ -727,11 +732,30 @@ void HomeActivity::render(Activity::RenderLock&&) {
   const int moodW = renderer.getTextWidth(SMALL_FONT_ID, moodText.c_str(), EpdFontFamily::BOLD);
   renderer.drawText(SMALL_FONT_ID, recentX + (cardWidth - moodW) / 2, petTextTop, moodText.c_str(), true, EpdFontFamily::BOLD);
 
-  const int iconTopMin = petTextTop + renderer.getLineHeight(SMALL_FONT_ID) + 6;
-  constexpr int petIconDrawSize = 48;
-  const int petIconY = std::max(iconTopMin, petCardY + petCardHeight - 8 - petIconDrawSize);
-  renderer.drawIcon(Pet48Icon, recentX + (cardWidth - petIconDrawSize) / 2, petIconY, petIconDrawSize,
-                    petIconDrawSize);
+  const int level = PET_MANAGER.getPetLevel();
+  const int levelProgress = PET_MANAGER.getLevelProgressPercent();
+  char levelText[20];
+  snprintf(levelText, sizeof(levelText), "Lv %d", level);
+  const int levelY = petTextTop + renderer.getLineHeight(SMALL_FONT_ID) + 2;
+  const int levelW = renderer.getTextWidth(SMALL_FONT_ID, levelText, EpdFontFamily::BOLD);
+  renderer.drawText(SMALL_FONT_ID, recentX + 10, levelY, levelText, true, EpdFontFamily::BOLD);
+
+  const int barX = recentX + 10 + levelW + 8;
+  const int barW = std::max(20, cardWidth - 20 - levelW - 8);
+  renderer.drawRect(barX, levelY + 1, barW, 8, true);
+  const int fill = ((barW - 2) * std::max(0, std::min(100, levelProgress))) / 100;
+  if (fill > 0) {
+    renderer.fillRect(barX + 1, levelY + 2, fill, 6, true);
+  }
+
+  const int spriteTop = levelY + renderer.getLineHeight(SMALL_FONT_ID) + 4;
+  const int spriteBottom = petCardY + petCardHeight - 8;
+  const int availableH = spriteBottom - spriteTop;
+  const int scale = (availableH >= PetSpriteRenderer::displaySize(2)) ? 2 : 1;
+  const int spriteSize = PetSpriteRenderer::displaySize(scale);
+  const int spriteY = spriteTop + std::max(0, (availableH - spriteSize) / 2);
+  PetSpriteRenderer::drawPet(renderer, recentX + (cardWidth - spriteSize) / 2, spriteY, petState.stage, petState.mood,
+                            scale, petState.evolutionVariant, petState.petType, 0);
 
   constexpr int nativeIconSize = 96;
 

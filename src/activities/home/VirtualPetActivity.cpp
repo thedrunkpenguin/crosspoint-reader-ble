@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "MappedInputManager.h"
+#include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "pet/PetManager.h"
@@ -50,6 +51,42 @@ const char* VirtualPetActivity::moodText() const {
   }
 }
 
+void VirtualPetActivity::keepSelectionVisible() {
+  if (selectorIndex < menuStartIndex) {
+    menuStartIndex = selectorIndex;
+  } else if (selectorIndex >= menuStartIndex + visibleCommandRows) {
+    menuStartIndex = selectorIndex - visibleCommandRows + 1;
+  }
+
+  const int maxStart = std::max(0, actionCount - visibleCommandRows);
+  if (menuStartIndex > maxStart) menuStartIndex = maxStart;
+  if (menuStartIndex < 0) menuStartIndex = 0;
+}
+
+void VirtualPetActivity::openRenameKeyboard() {
+  std::string currentName = PET_MANAGER.state().petName;
+  if (currentName.empty()) {
+    currentName = petTypeName(PET_MANAGER.state().petType);
+  }
+
+  auto onComplete = [this](const std::string& value) {
+    PET_MANAGER.renamePet(value.c_str());
+    swallowBackRelease = true;
+    swallowConfirmRelease = true;
+    exitActivity();
+    requestUpdate();
+  };
+
+  auto onCancel = [this]() {
+    swallowBackRelease = true;
+    swallowConfirmRelease = true;
+    exitActivity();
+    requestUpdate();
+  };
+
+  enterNewActivity(new KeyboardEntryActivity(renderer, mappedInput, "Pet Name", currentName, 18, false, onComplete, onCancel));
+}
+
 void VirtualPetActivity::applyAction(int index) {
   if (!PET_MANAGER.state().alive) {
     if (index == 0) {
@@ -93,6 +130,17 @@ void VirtualPetActivity::applyAction(int index) {
       inTypeSelect = true;
       typeSelectIndex = PET_MANAGER.state().petType % 5;
       break;
+    case 10:
+      openRenameKeyboard();
+      break;
+    case 11:
+      PET_MANAGER.resetPet();
+      selectorIndex = 0;
+      menuStartIndex = 0;
+      typeSelectIndex = 0;
+      inTypeSelect = false;
+      changingType = false;
+      break;
     default:
       break;
   }
@@ -102,14 +150,43 @@ void VirtualPetActivity::applyAction(int index) {
 void VirtualPetActivity::onEnter() {
   Activity::onEnter();
   selectorIndex = 0;
+  menuStartIndex = 0;
   typeSelectIndex = PET_MANAGER.state().petType % 5;
   inTypeSelect = false;
   changingType = false;
+  swallowBackRelease = false;
+  swallowConfirmRelease = false;
   PET_MANAGER.tick();
   requestUpdate();
 }
 
 void VirtualPetActivity::loop() {
+  if (subActivity) {
+    subActivity->loop();
+    return;
+  }
+
+  bool consumedSwallowedRelease = false;
+
+  if (swallowBackRelease) {
+    if (!mappedInput.isPressed(MappedInputManager::Button::Back)) {
+      swallowBackRelease = false;
+      consumedSwallowedRelease = true;
+    }
+  }
+
+  if (swallowConfirmRelease) {
+    if (!mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
+      swallowConfirmRelease = false;
+      consumedSwallowedRelease = true;
+    }
+  }
+
+  if (consumedSwallowedRelease) {
+    requestUpdate();
+    return;
+  }
+
   PET_MANAGER.tick();
 
   if (inTypeSelect) {
@@ -141,7 +218,7 @@ void VirtualPetActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  if (!swallowBackRelease && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     if (onBack) {
       onBack();
     }
@@ -164,18 +241,18 @@ void VirtualPetActivity::loop() {
     return;
   }
 
-  const int actionCount = 10;
-
   if (mappedInput.wasReleased(MappedInputManager::Button::Up) || mappedInput.wasReleased(MappedInputManager::Button::Left)) {
     selectorIndex = (selectorIndex - 1 + actionCount) % actionCount;
+    keepSelectionVisible();
     requestUpdate();
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Down) ||
              mappedInput.wasReleased(MappedInputManager::Button::Right)) {
     selectorIndex = (selectorIndex + 1) % actionCount;
+    keepSelectionVisible();
     requestUpdate();
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  if (!swallowConfirmRelease && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     applyAction(selectorIndex);
   }
 }
@@ -225,9 +302,10 @@ void VirtualPetActivity::render(Activity::RenderLock&&) {
     }
   };
 
-  const char* actionsAlive[10] = {tr(STR_PET_FEED_MEAL), tr(STR_PET_FEED_SNACK), tr(STR_PET_MEDICINE), tr(STR_PET_EXERCISE),
-                                  tr(STR_PET_CLEAN), tr(STR_PET_PRAISE), tr(STR_PET_DISCIPLINE_ACT), "Ignore",
-                                  tr(STR_PET_LIGHTS), "Type"};
+  const char* actionsAlive[actionCount] = {tr(STR_PET_FEED_MEAL), tr(STR_PET_FEED_SNACK), tr(STR_PET_MEDICINE),
+                                           tr(STR_PET_EXERCISE), tr(STR_PET_CLEAN), tr(STR_PET_PRAISE),
+                                           tr(STR_PET_DISCIPLINE_ACT), "Ignore", tr(STR_PET_LIGHTS), "Type", "Rename",
+                                           "Start Over"};
 
   if (inTypeSelect) {
     const int centerY = contentTop + (contentBottom - contentTop) / 2;
@@ -279,11 +357,19 @@ void VirtualPetActivity::render(Activity::RenderLock&&) {
                    state.petType,
                    0);
 
-    renderer.drawCenteredText(UI_12_FONT_ID, spriteY + petSize + 10, stageText(), true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(SMALL_FONT_ID, spriteY + petSize + 34, moodText());
+    const char* activeName = state.petName[0] ? state.petName : petTypeName(state.petType);
+        const int infoTop = spriteY + petSize + 10;
+        renderer.drawCenteredText(UI_12_FONT_ID, infoTop, activeName, true, EpdFontFamily::BOLD);
+        renderer.drawCenteredText(UI_10_FONT_ID, infoTop + 20, stageText(), true, EpdFontFamily::BOLD);
+        renderer.drawCenteredText(UI_10_FONT_ID, infoTop + 36, moodText());
+
+    const int level = PET_MANAGER.getPetLevel();
+    const int levelProgress = PET_MANAGER.getLevelProgressPercent();
+    char levelText[24];
+    snprintf(levelText, sizeof(levelText), "Level %d", level);
 
     const int sideMargin = 28;
-    const int statsY = spriteY + petSize + 58;
+        const int statsY = infoTop + 54;
     const int barW = pageWidth - sideMargin * 2;
     const int barSpacing = renderer.getLineHeight(SMALL_FONT_ID) + 10;
     drawBar(sideMargin, statsY + barSpacing * 0, barW, tr(STR_PET_HUNGER), state.hunger);
@@ -295,14 +381,28 @@ void VirtualPetActivity::render(Activity::RenderLock&&) {
     const int readingPct = static_cast<int>((state.readPages % 10) * 10);
     drawBar(sideMargin, statsY + barSpacing * 5, barW, tr(STR_PET_PAGES_TO_FEED), readingPct);
 
-    const int menuY = statsY + barSpacing * 6 + 6;
+    const int levelBarX = 10;
+    const int levelBarY = contentBottom - 10;
+    const int levelBarW = pageWidth - 20;
+    const int levelLabelY = levelBarY - renderer.getLineHeight(SMALL_FONT_ID) - 2;
+
+    renderer.drawCenteredText(SMALL_FONT_ID, levelLabelY, levelText, true, EpdFontFamily::BOLD);
+    renderer.drawRect(levelBarX, levelBarY, levelBarW, 8, true);
+    const int levelFill = ((levelBarW - 2) * std::max(0, std::min(100, levelProgress))) / 100;
+    if (levelFill > 0) {
+      renderer.fillRect(levelBarX + 1, levelBarY + 1, levelFill, 6, true);
+    }
+
+    const int menuY = statsY + barSpacing * 6 + 12;
     const int menuRowH = renderer.getLineHeight(SMALL_FONT_ID) + 3;
     const int menuW = pageWidth - sideMargin * 2;
-    for (int i = 0; i < 10; ++i) {
-      const int y = menuY + i * menuRowH;
-      if (y + menuRowH > contentBottom - 4) {
-        break;
-      }
+    const int menuBottomLimit = levelLabelY - 4;
+    const int maxRowsBySpace = std::max(1, (menuBottomLimit - menuY) / menuRowH);
+    const int visible = std::min(std::min(visibleCommandRows, actionCount), maxRowsBySpace);
+    for (int row = 0; row < visible; ++row) {
+      const int i = menuStartIndex + row;
+      if (i >= actionCount) break;
+      const int y = menuY + row * menuRowH;
       const bool selected = selectorIndex == i;
       if (selected) {
         renderer.fillRect(sideMargin, y, menuW, menuRowH, true);
@@ -310,6 +410,13 @@ void VirtualPetActivity::render(Activity::RenderLock&&) {
       } else {
         renderer.drawText(SMALL_FONT_ID, sideMargin + 6, y + 3, actionsAlive[i], true);
       }
+    }
+
+    if (actionCount > visibleCommandRows) {
+      const int indicatorY = menuY + visible * menuRowH + 2;
+      char listInfo[20];
+      snprintf(listInfo, sizeof(listInfo), "%d/%d", selectorIndex + 1, actionCount);
+      renderer.drawCenteredText(SMALL_FONT_ID, indicatorY, listInfo);
     }
   }
 

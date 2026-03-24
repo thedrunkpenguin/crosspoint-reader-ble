@@ -23,6 +23,7 @@ class GameMenuActivity final : public Activity {
 
   // Callbacks
   const std::function<void()> onResume;
+  const std::function<void()> onSave;
   const std::function<void()> onSaveQuit;
   const std::function<void()> onAbandon;
 
@@ -36,10 +37,11 @@ class GameMenuActivity final : public Activity {
 
  public:
   explicit GameMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                            const std::function<void()>& onResume, const std::function<void()>& onSaveQuit,
-                            const std::function<void()>& onAbandon)
+                            const std::function<void()>& onResume, const std::function<void()>& onSave,
+                            const std::function<void()>& onSaveQuit, const std::function<void()>& onAbandon)
       : Activity("GameMenu", renderer, mappedInput),
         onResume(onResume),
+        onSave(onSave),
         onSaveQuit(onSaveQuit),
         onAbandon(onAbandon) {}
 

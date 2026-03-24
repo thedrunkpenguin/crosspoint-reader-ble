@@ -8,6 +8,52 @@
 namespace {
 constexpr const char* kPetDir = "/.crosspoint/pet";
 constexpr const char* kPetStatePath = "/.crosspoint/pet/state.bin";
+constexpr uint32_t kPetSaveMagic = 0x31544550;  // PET1
+constexpr uint8_t kPetSaveVersion = 1;
+
+bool isReasonablePetNameChar(char ch) {
+  return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == ' ' || ch == '-' ||
+         ch == '_' || ch == '\'';
+}
+
+void sanitizePetState(PetState& state) {
+  state.petName[sizeof(state.petName) - 1] = '\0';
+
+  bool validName = true;
+  bool anyVisible = false;
+  for (size_t i = 0; i < sizeof(state.petName) && state.petName[i] != '\0'; ++i) {
+    const char ch = state.petName[i];
+    if (!isReasonablePetNameChar(ch)) {
+      validName = false;
+      break;
+    }
+    if (ch != ' ') {
+      anyVisible = true;
+    }
+  }
+  if (!validName || !anyVisible) {
+    state.petName[0] = '\0';
+  }
+
+  if (state.petType >= PetTypeNames::COUNT) {
+    state.petType = 0;
+  }
+
+  if (static_cast<uint8_t>(state.stage) > static_cast<uint8_t>(PetStage::Dead)) {
+    state.stage = state.alive ? PetStage::Egg : PetStage::Dead;
+  }
+
+  if (static_cast<uint8_t>(state.mood) > static_cast<uint8_t>(PetMood::Refusing)) {
+    state.mood = state.alive ? PetMood::Normal : PetMood::Dead;
+  }
+
+  state.hunger = std::max(0, std::min(100, state.hunger));
+  state.happiness = std::max(0, std::min(100, state.happiness));
+  state.health = std::max(0, std::min(100, state.health));
+  state.energy = std::max(0, std::min(100, state.energy));
+  state.discipline = std::max(0, std::min(100, state.discipline));
+  state.weight = std::max(0, std::min(100, state.weight));
+}
 }
 
 namespace pet {
@@ -22,11 +68,31 @@ bool loadState(PetState& state) {
 
   state = PetState{};
 
-  serialization::readPod(f, state.initialized);
+  uint32_t header = 0;
+  serialization::readPod(f, header);
+
+  if (header == kPetSaveMagic) {
+    uint8_t version = 0;
+    serialization::readPod(f, version);
+    if (version != kPetSaveVersion) {
+      f.close();
+      Serial.printf("[PET] Unsupported save version %u - starting fresh\n", static_cast<unsigned>(version));
+      return false;
+    }
+
+    serialization::readPod(f, state.initialized);
+    serialization::readPod(f, state.alive);
+    serialization::readPod(f, state.stage);
+    serialization::readPod(f, state.mood);
+  } else {
+    const uint8_t* legacy = reinterpret_cast<const uint8_t*>(&header);
+    state.initialized = (legacy[0] != 0);
+    state.alive = (legacy[1] != 0);
+    state.stage = static_cast<PetStage>(legacy[2]);
+    state.mood = static_cast<PetMood>(legacy[3]);
+  }
+
   state.petType = 0;
-  serialization::readPod(f, state.alive);
-  serialization::readPod(f, state.stage);
-  serialization::readPod(f, state.mood);
   serialization::readPod(f, state.petType);
   serialization::readPod(f, state.petName);
 
@@ -79,6 +145,7 @@ bool loadState(PetState& state) {
   if (state.stage == PetStage::Dead) {
     state.alive = false;
   }
+  sanitizePetState(state);
   Serial.printf("[PET] Pet state loaded (alive=%d stage=%d hunger=%d)\n",
                 static_cast<int>(state.alive), static_cast<int>(state.stage),
                 static_cast<int>(state.hunger));
@@ -96,6 +163,9 @@ bool saveState(const PetState& state) {
   Serial.printf("[PET] Saving pet state (alive=%d stage=%d hunger=%d)\n",
                 static_cast<int>(state.alive), static_cast<int>(state.stage),
                 static_cast<int>(state.hunger));
+
+  serialization::writePod(f, kPetSaveMagic);
+  serialization::writePod(f, kPetSaveVersion);
 
   serialization::writePod(f, state.initialized);
   serialization::writePod(f, state.alive);
@@ -145,6 +215,15 @@ bool saveState(const PetState& state) {
 
   f.close();
   Serial.printf("[PET] Pet state saved successfully\n");
+  return true;
+}
+
+bool clearState() {
+  if (Storage.exists(kPetStatePath)) {
+    const bool removed = Storage.remove(kPetStatePath);
+    Serial.printf("[PET] Clear pet state file: %s\n", removed ? "removed" : "failed");
+    return removed;
+  }
   return true;
 }
 

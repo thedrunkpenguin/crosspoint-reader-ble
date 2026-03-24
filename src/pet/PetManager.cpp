@@ -4,6 +4,7 @@
 
 #include <I18n.h>
 
+#include <algorithm>
 #include <cstring>
 #include <ctime>
 
@@ -11,6 +12,34 @@
 #include "PetDecayEngine.h"
 #include "PetEvolution.h"
 #include "PetPersistence.h"
+
+namespace {
+constexpr uint8_t PET_MAX_LEVEL = 25;
+constexpr uint32_t PET_LEVEL_BASE_PAGES = 20;
+constexpr uint32_t PET_LEVEL_STEP_GROWTH = 12;
+
+struct PetLevelProgress {
+  uint8_t level;
+  uint8_t progress;
+};
+
+PetLevelProgress calculatePetLevelProgress(const uint32_t totalPagesRead) {
+  uint8_t level = 1;
+  uint32_t pagesIntoLevel = totalPagesRead;
+
+  while (level < PET_MAX_LEVEL) {
+    const uint32_t pagesNeededForNext = PET_LEVEL_BASE_PAGES + (static_cast<uint32_t>(level) - 1u) * PET_LEVEL_STEP_GROWTH;
+    if (pagesIntoLevel < pagesNeededForNext) {
+      const uint8_t progress = static_cast<uint8_t>((pagesIntoLevel * 100u) / pagesNeededForNext);
+      return {level, progress};
+    }
+    pagesIntoLevel -= pagesNeededForNext;
+    level++;
+  }
+
+  return {PET_MAX_LEVEL, 100};
+}
+}  // namespace
 
 int PetManager::clamp(int value) {
   if (value < 0) return 0;
@@ -113,6 +142,16 @@ bool PetManager::renamePet(const char* name) {
     state_.petName[0] = '\0';
   }
   return save();
+}
+
+bool PetManager::resetPet() {
+  state_ = PetState{};
+  lastPetTimeMs_ = 0;
+  lastExerciseMs_ = 0;
+  lastFeedback_ = nullptr;
+  pendingMilestone_ = Milestone::NONE;
+  lastMilestoneValue_ = 0;
+  return pet::clearState();
 }
 
 void PetManager::updateStreak() {
@@ -269,6 +308,8 @@ void PetManager::onPageTurn() {
     state_.mealsFromReading++;
     (void)feedMeal();
   }
+
+  PetEvolution::checkEvolution(state_);
 
   recalcMood();
   save();
@@ -531,4 +572,14 @@ void PetManager::getMissions(PetMission out[3]) const {
   out[0] = {"Read 20 pages", state_.missionPagesRead, 20, state_.missionPagesRead >= 20};
   out[1] = {"Pet 3x", state_.missionPetCount, 3, state_.missionPetCount >= 3};
   out[2] = {"Keep fed", static_cast<uint8_t>(state_.hunger), 40, state_.hunger >= 40};
+}
+
+uint8_t PetManager::getPetLevel() const {
+  if (!state_.exists() || !state_.isAlive()) return 1;
+  return calculatePetLevelProgress(state_.totalPagesRead).level;
+}
+
+uint8_t PetManager::getLevelProgressPercent() const {
+  if (!state_.exists() || !state_.isAlive()) return 0;
+  return calculatePetLevelProgress(state_.totalPagesRead).progress;
 }

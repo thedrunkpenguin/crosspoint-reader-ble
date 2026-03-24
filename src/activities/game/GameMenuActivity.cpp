@@ -61,7 +61,7 @@ void GameMenuActivity::loop() {
 
   switch (currentScreen) {
     case Screen::Menu: {
-      constexpr int menuSize = 5;  // Resume, Inventory, Character, Save & Quit, Abandon
+      constexpr int menuSize = 6;  // Resume, Inventory, Character, Save, Save & Quit, Abandon
 
       buttonNavigator.onNextRelease([this] {
         selectedIndex = ButtonNavigator::nextIndex(selectedIndex, menuSize);
@@ -88,10 +88,14 @@ void GameMenuActivity::loop() {
             selectedIndex = 0;
             updateRequired = true;
             break;
-          case 3:  // Save & Quit
+          case 3:  // Save
+            onSave();
+            onResume();
+            return;
+          case 4:  // Save & Quit
             onSaveQuit();
             return;
-          case 4:  // Abandon Run
+          case 5:  // Abandon Run
             onAbandon();
             return;
         }
@@ -278,10 +282,10 @@ void GameMenuActivity::renderMenu() {
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
 
-  static const char* items[] = {"Resume Game", "Inventory", "Character", "Save & Quit", "Abandon Run"};
+  static const char* items[] = {"Resume Game", "Inventory", "Character", "Save", "Save & Quit", "Abandon Run"};
 
   GUI.drawButtonMenu(
-      renderer, Rect(0, contentTop, pageWidth, contentHeight), 5, selectedIndex,
+      renderer, Rect(0, contentTop, pageWidth, contentHeight), 6, selectedIndex,
       [](int index) { return std::string(items[index]); }, nullptr);
 
   const auto labels = mappedInput.mapLabels("\xC2\xAB Back", "Select", "Up", "Down");

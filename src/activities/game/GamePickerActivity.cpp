@@ -6,11 +6,12 @@
 #include <vector>
 
 #include "MappedInputManager.h"
+#include "RPGActivity.h"
 #include "SolitaireActivity.h"
 #include "components/UITheme.h"
 
 int GamePickerActivity::gameCount() const {
-  return 2;
+  return 3;
 }
 
 void GamePickerActivity::onEnter() {
@@ -36,6 +37,10 @@ void GamePickerActivity::openSelectedGame() {
     case 1:
       enterNewActivity(new SolitaireActivity(renderer, mappedInput, onExitToPicker));
       break;
+    case 2: {
+      enterNewActivity(new RPGActivity(renderer, mappedInput, onExitToPicker));
+      break;
+    }
     default:
       break;
   }
@@ -94,13 +99,17 @@ void GamePickerActivity::render(Activity::RenderLock&&) {
         return std::string(I18N.get(StrId::STR_DEEP_MINES));
       case 1:
         return std::string("Solitaire");
+      case 2:
+        return std::string("Fantasy RPG");
       default:
         return std::string();
     }
   };
   const std::function<std::string(int)> rowSubtitle = [](int index) {
     if (index == 1) {
-      return std::string("Golf Solitaire");
+      return std::string("Klondike Solitaire");
+    } else if (index == 2) {
+      return std::string("Medieval Fantasy");
     }
     return std::string();
   };

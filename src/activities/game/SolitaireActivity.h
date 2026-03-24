@@ -1,25 +1,27 @@
 #pragma once
 
 #include <array>
+#include <deque>
 #include <functional>
 
 #include "../Activity.h"
 
 class SolitaireActivity final : public Activity {
   struct Card {
-    uint8_t rank = 0;  // 1..13
-    uint8_t suit = 0;  // 0..3
+    uint8_t rank = 0;  // 1..13 (1=Ace, 13=King)
+    uint8_t suit = 0;  // 0=Hearts, 1=Diamonds, 2=Clubs, 3=Spades
   };
 
-  static constexpr int COLUMN_COUNT = 7;
-  static constexpr int CARDS_PER_COLUMN = 5;
+  static constexpr int TABLEAU_COUNT = 7;
+  static constexpr int FOUNDATION_COUNT = 4;
 
-  std::array<std::array<Card, CARDS_PER_COLUMN>, COLUMN_COUNT> tableau{};
-  std::array<uint8_t, COLUMN_COUNT> tableauCounts{};
-  std::array<Card, 16> stock{};
-  uint8_t stockCount = 0;
-  Card waste{};
-  int selectedColumn = 0;
+  std::array<std::deque<Card>, TABLEAU_COUNT> tableau{};
+  std::array<Card, FOUNDATION_COUNT> foundation{};  // Top card in each foundation
+  std::deque<Card> stock{};
+  std::deque<Card> waste{};
+  
+  int selectedColumn = 0;  // 0-6 for tableau, or use mode to indicate stock/waste
+  int selectionMode = 0;   // 0=tableau, 1=stock, 2=waste
   bool gameWon = false;
   bool gameLost = false;
 
@@ -27,16 +29,14 @@ class SolitaireActivity final : public Activity {
 
   void startNewGame();
   void shuffleDeck(std::array<Card, 52>& deck);
-  bool canPlayColumn(int column) const;
-  bool playColumn(int column);
-  bool drawFromStock();
-  bool hasPlayableColumn() const;
+  bool canMoveToTableau(const Card& card, int column) const;
+  bool canMoveToFoundation(const Card& card) const;
+  bool tryAutoMove();
   void updateEndState();
-  int remainingCards() const;
 
-  static bool isAdjacentRank(uint8_t a, uint8_t b);
+  static bool isRed(uint8_t suit);
   static const char* rankText(uint8_t rank);
-  static const char* suitText(uint8_t suit);
+  static const char* suitSymbol(uint8_t suit);
   void drawCard(int x, int y, int w, int h, const Card& card, bool selected, bool faceDown = false);
 
  public:
