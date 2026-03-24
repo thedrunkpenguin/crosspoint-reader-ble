@@ -11,7 +11,36 @@ fully-featured, open-source replacement firmware with additional quality-of-life
 
 ## Release Highlights
 
-### v1.1.1.7-ble (latest)
+### v1.1.1.10-ble (latest)
+
+- **IINE Game Brick full D-pad support**: Up, Down, Left, Right, A and B buttons all decode correctly in both menu and reader contexts.
+- Fixes **A-button → Up cross-trigger** that caused unintended upward navigation when pressing A on the Game Brick.
+- Adds **multi-mode detection**: Game Brick's C/T/H firmware modes (changed by holding the mode button) are now auto-detected — the standard-HID path (mode H) is handled alongside the proprietary mode-C decode.
+- Improves **LEFT reliability** with a burst-frame detector for the centered-button pattern used by some Game Brick units.
+- **Pet save format versioned** (`PET1` magic + version byte) so the save survives firmware updates without resetting the pet.
+- **Pet name sanitization**: names are validated on load, preventing garbled text or file-path strings from appearing as the pet's name after an unclean save.
+- Adds **"Start Over"** to the Virtual Pet action menu — wipes the save file and resets the pet to a fresh egg for testing or a fresh start.
+- Fixes **rename keyboard re-opening**: after confirming a new pet name the on-screen keyboard no longer immediately re-launches.
+- RPG activity foundation committed (character, encounter, item stubs) — not yet accessible from the menu.
+
+### v1.1.1.9-ble
+
+- Adds a playable **Golf Solitaire** card game, accessible from the Games menu alongside Deep Mines.
+- Solitaire layout is fully responsive — all seven card columns fit the device screen without scrolling.
+- Fixes **pet card icon** on the Cards home-screen theme: icon now uses a native 48×48 asset, eliminating render artefacts.
+
+### v1.1.1.8-ble
+
+- **Pet persistence**: always creates the save directory before writing, fixing a silent failure that caused pets to reset on reboot when the directory did not exist.
+- **Deep Mines dungeon seeds** now use `esp_random()` (hardware RNG) instead of a millis-based value, so every new run is genuinely random.
+- **Games list streamlined**: Games menu now shows only Deep Mines and Solitaire; other game code is preserved for future re-addition.
+- **Cards theme UI improvements**:
+  - Recent books card enlarged to 60% of the right column (was 50%).
+  - Virtual pet card shrunk to 40% (was 50%).
+  - Book titles now word-wrap at space boundaries and show two lines instead of truncating with an ellipsis.
+  - Progress bar added below each book title showing reading percentage.
+
+### v1.1.1.7-ble
 
 - Bluetooth Debug Monitor now shows **unique keycodes with hit counts** for better unknown-remote integration.
 - Unique key list is sorted by **highest frequency first**, making dominant forward/back candidate codes easier to identify.
@@ -141,13 +170,14 @@ This project is **not affiliated with Xteink**; it's built as a community projec
 - Learn the buttons of unknown remotes directly on-device
 
 ### Mini-Games
+- **Deep Mines** — randomly generated dungeon maze to navigate
+- **Golf Solitaire** — clear all cards from a seven-column tableau
 - **Chess** — full two-player chess on the e-ink display
 - **Caro (Gomoku)** — five-in-a-row strategy game
 - **Sudoku** — classic number puzzle
 - **Minesweeper** — mine-clearing puzzle
 - **2048** — tile-merging number game
 - **Snake** — classic snake
-- **Maze** — randomly generated mazes to navigate
 - **Game of Life** — Conway's cellular automaton
 
 ### UI Themes
@@ -194,8 +224,7 @@ If your remote is not recognised out of the box, you can teach the firmware whic
 
 ### Known Device Profiles
 
-- **GameBrick**: D-pad UP/LEFT = previous page, D-pad DOWN/RIGHT = next page. Spurious A/B events during D-pad
-  use are suppressed automatically.
+- **GameBrick (IINE Game Brick)**: D-pad UP/LEFT = previous page, D-pad DOWN/RIGHT = next page. A and B buttons work correctly as confirm/select in menus. Spurious A/B cross-triggers during D-pad use are suppressed. All three firmware modes (C/T/H, toggled by holding the mode button until the LED changes) are auto-detected.
 - **Mini_Keyboard (Gugxiom)**: The two keys are mapped to page up and page down.
 - **Generic HID**: Standard arrow keys and Page Up/Page Down are mapped automatically.
 
@@ -223,13 +252,14 @@ Access games via the **Games** option on the home screen or main menu.
 
 | Game | Description | Controls |
 |---|---|---|
+| **Deep Mines (Maze)** | Navigate a randomly-generated dungeon | D-pad to move |
+| **Golf Solitaire** | Card game — clear all cards from the tableau | D-pad to select, Confirm to play |
 | **Chess** | Two-player chess | D-pad to move cursor, Select to pick/place piece |
 | **Caro (Gomoku)** | Five in a row | D-pad to move, Select to place stone |
 | **Sudoku** | Classic 9×9 puzzle | D-pad to navigate, number buttons to fill |
 | **Minesweeper** | Mine-clearing puzzle | D-pad, Select to reveal, hold to flag |
 | **2048** | Merge tiles to reach 2048 | D-pad directions |
 | **Snake** | Classic snake game | D-pad to steer |
-| **Maze** | Navigate a randomly-generated maze | D-pad to move |
 | **Game of Life** | Conway's cellular automaton | Auto-runs; Select to step/pause |
 
 Games are based on community contributions from:
@@ -344,6 +374,9 @@ usable RAM, so many design decisions were driven by this constraint.
 │       ├── 0.bin            # Chapter data (screen count, all text layout info, etc.)
 │       ├── 1.bin            #     files are named by their index in the spine
 │       └── ...
+│
+├── pet/
+│   └── state.bin            # Virtual pet save (versioned binary, magic PET1)
 │
 ├── ble_custom_profile.txt   # Learned BLE remote keycode mapping (if set)
 └── epub_189013891/
