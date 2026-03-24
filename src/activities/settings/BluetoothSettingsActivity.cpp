@@ -133,7 +133,26 @@ void BluetoothSettingsActivity::loop() {
 }
 
 void BluetoothSettingsActivity::handleMainMenuInput() {
-  constexpr int kMainMenuItemCount = 8;
+  constexpr int kMainMenuItemCount =
+#ifdef ENABLE_BT_DEBUG_MONITOR
+      8;
+#else
+      7;
+#endif
+
+  constexpr int kToggleBluetoothIndex = 0;
+  constexpr int kReconnectBondedIndex = 1;
+  constexpr int kDisconnectDevicesIndex = 2;
+  constexpr int kScanForDevicesIndex = 3;
+  constexpr int kRemoteSetupWizardIndex = 4;
+#ifdef ENABLE_BT_DEBUG_MONITOR
+  constexpr int kDebugMonitorIndex = 5;
+  constexpr int kClearLearnedKeysIndex = 6;
+  constexpr int kForgetBondedRemoteIndex = 7;
+#else
+  constexpr int kClearLearnedKeysIndex = 5;
+  constexpr int kForgetBondedRemoteIndex = 6;
+#endif
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
     selectedIndex = (selectedIndex > 0) ? selectedIndex - 1 : (kMainMenuItemCount - 1);
@@ -151,7 +170,7 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
       return;
     }
 
-    if (selectedIndex == 0) {
+    if (selectedIndex == kToggleBluetoothIndex) {
       // Toggle Bluetooth
       try {
         if (btMgr->isEnabled()) {
@@ -181,7 +200,7 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
         LOG_ERR("BT", "Unknown error toggling Bluetooth");
       }
       requestUpdate();
-    } else if (selectedIndex == 1) {
+    } else if (selectedIndex == kReconnectBondedIndex) {
       if (!btMgr->isEnabled()) {
         lastError = "Enable BT first";
       } else if (SETTINGS.bleBondedDeviceAddr[0] == '\0') {
@@ -202,7 +221,7 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
         }
       }
       requestUpdate();
-    } else if (selectedIndex == 2) {
+    } else if (selectedIndex == kDisconnectDevicesIndex) {
       if (!btMgr->isEnabled()) {
         lastError = "Enable BT first";
       } else {
@@ -218,7 +237,7 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
         }
       }
       requestUpdate();
-    } else if (selectedIndex == 3) {
+    } else if (selectedIndex == kScanForDevicesIndex) {
       // Start scan and switch to device list
       if (btMgr->isEnabled()) {
         btMgr->startScan(10000);
@@ -230,7 +249,7 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
         lastError = "Enable BT first";
       }
       requestUpdate();
-    } else if (selectedIndex == 4) {
+    } else if (selectedIndex == kRemoteSetupWizardIndex) {
       if (!btMgr->isEnabled()) {
         lastError = "Enable BT first";
       } else if (btMgr->getConnectedDevices().empty()) {
@@ -257,7 +276,9 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
         lastError = "Wizard: press FORWARD button";
       }
       requestUpdate();
-    } else if (selectedIndex == 5) {
+    }
+#ifdef ENABLE_BT_DEBUG_MONITOR
+    else if (selectedIndex == kDebugMonitorIndex) {
       if (!btMgr->isDebugCaptureEnabled()) {
         btMgr->setDebugCaptureEnabled(true);
       }
@@ -293,11 +314,13 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
       viewMode = ViewMode::DEBUG_MONITOR;
       lastError = "BT debug monitor";
       requestUpdate();
-    } else if (selectedIndex == 6) {
+    }
+#endif
+    else if (selectedIndex == kClearLearnedKeysIndex) {
       DeviceProfiles::clearCustomProfile();
       lastError = "Learned mapping cleared";
       requestUpdate();
-    } else if (selectedIndex == 7) {
+    } else if (selectedIndex == kForgetBondedRemoteIndex) {
       SETTINGS.bleBondedDeviceAddr[0] = '\0';
       SETTINGS.bleBondedDeviceName[0] = '\0';
       SETTINGS.bleBondedDeviceAddrType = 0;
@@ -596,13 +619,15 @@ void BluetoothSettingsActivity::renderMainMenu() {
     "Disconnect Device(s)",
     "Scan for Devices",
     "Remote Setup Wizard",
+#ifdef ENABLE_BT_DEBUG_MONITOR
     btMgr && btMgr->isDebugCaptureEnabled() ? "Disable BT Debug Capture" : "Enable BT Debug Capture",
+#endif
     "Clear Learned Keys",
     "Forget Bonded Remote"
   };
 
   std::vector<std::string> itemLabels;
-  for (int i = 0; i < 8; i++) {
+  for (int i = 0; i < static_cast<int>(sizeof(items) / sizeof(items[0])); i++) {
     itemLabels.push_back(items[i]);
   }
 
@@ -613,7 +638,7 @@ void BluetoothSettingsActivity::renderMainMenu() {
            pageWidth,
            pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.buttonHintsHeight +
                          metrics.verticalSpacing * 2 + listOffsetY)},
-      8, selectedIndex,
+      static_cast<int>(itemLabels.size()), selectedIndex,
       [&itemLabels](int index) { return itemLabels[index]; }, nullptr, nullptr,
       [this](int i) {
         if (i == 0) {
