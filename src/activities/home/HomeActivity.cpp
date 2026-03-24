@@ -27,6 +27,7 @@
 #include "components/icons/folder2.h"
 #include "components/icons/game.h"
 #include "components/icons/pet.h"
+#include "components/icons/pet48.h"
 #include "components/icons/wifi.h"
 #include "components/icons/wifi_wide.h"
 #include "fontIds.h"
@@ -727,10 +728,10 @@ void HomeActivity::render(Activity::RenderLock&&) {
   renderer.drawText(SMALL_FONT_ID, recentX + (cardWidth - moodW) / 2, petTextTop, moodText.c_str(), true, EpdFontFamily::BOLD);
 
   const int iconTopMin = petTextTop + renderer.getLineHeight(SMALL_FONT_ID) + 6;
-  const int availableIconHeight = petCardY + petCardHeight - 8 - iconTopMin;
-  const int petIconDrawSize = std::clamp(availableIconHeight, 32, 96);
-  const int petIconY = petCardY + petCardHeight - 8 - petIconDrawSize;
-  renderer.drawIcon(PetIcon, recentX + (cardWidth - petIconDrawSize) / 2, petIconY, petIconDrawSize, petIconDrawSize);
+  constexpr int petIconDrawSize = 48;
+  const int petIconY = std::max(iconTopMin, petCardY + petCardHeight - 8 - petIconDrawSize);
+  renderer.drawIcon(Pet48Icon, recentX + (cardWidth - petIconDrawSize) / 2, petIconY, petIconDrawSize,
+                    petIconDrawSize);
 
   constexpr int nativeIconSize = 96;
 

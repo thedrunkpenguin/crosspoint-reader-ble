@@ -6,10 +6,11 @@
 #include <vector>
 
 #include "MappedInputManager.h"
+#include "SolitaireActivity.h"
 #include "components/UITheme.h"
 
 int GamePickerActivity::gameCount() const {
-  return 1;
+  return 2;
 }
 
 void GamePickerActivity::onEnter() {
@@ -31,6 +32,9 @@ void GamePickerActivity::openSelectedGame() {
       if (onStartDeepMines) {
         onStartDeepMines();
       }
+      break;
+    case 1:
+      enterNewActivity(new SolitaireActivity(renderer, mappedInput, onExitToPicker));
       break;
     default:
       break;
@@ -81,15 +85,25 @@ void GamePickerActivity::render(Activity::RenderLock&&) {
 
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_GAMES));
 
-  static const StrId gameIds[] = {StrId::STR_DEEP_MINES};
-
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
 
   const std::function<std::string(int)> rowTitle = [&](int index) {
-    return std::string(I18N.get(gameIds[index]));
+    switch (index) {
+      case 0:
+        return std::string(I18N.get(StrId::STR_DEEP_MINES));
+      case 1:
+        return std::string("Solitaire");
+      default:
+        return std::string();
+    }
   };
-  const std::function<std::string(int)> rowSubtitle = [](int) { return std::string(); };
+  const std::function<std::string(int)> rowSubtitle = [](int index) {
+    if (index == 1) {
+      return std::string("Golf Solitaire");
+    }
+    return std::string();
+  };
   const std::function<UIIcon(int)> rowIcon = [](int) { return UIIcon::Book; };
 
   GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, gameCount(), selectorIndex, rowTitle,
