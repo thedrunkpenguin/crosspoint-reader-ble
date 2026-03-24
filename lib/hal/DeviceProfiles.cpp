@@ -115,6 +115,18 @@ void loadCustomProfileFromStorage() {
 
 namespace DeviceProfiles {
 
+static const DeviceProfile* findKnownProfileByName(const char* profileName) {
+  if (!profileName) {
+    return nullptr;
+  }
+  for (int i = 0; i < KNOWN_DEVICES_COUNT; i++) {
+    if (strcmp(KNOWN_DEVICES[i].name, profileName) == 0) {
+      return &KNOWN_DEVICES[i];
+    }
+  }
+  return nullptr;
+}
+
 const DeviceProfile* findDeviceProfile(const char* macAddress, const char* deviceName) {
   // First, try to find by MAC address prefix (case-insensitive comparison)
   if (macAddress) {
@@ -165,7 +177,9 @@ const DeviceProfile* findDeviceProfile(const char* macAddress, const char* devic
         if (strstr(deviceName, "Brick") || strstr(deviceName, "brick") || 
             strstr(deviceName, "BRICK")) {
           LOG_INF("DEV", "✓ Matched GameBrick by name pattern: %s -> IINE Game Brick", deviceName);
-          return &KNOWN_DEVICES[0];  // Return GameBrick profile
+          if (const DeviceProfile* profile = findKnownProfileByName("IINE Game Brick")) {
+            return profile;
+          }
         }
       }
 
@@ -173,7 +187,9 @@ const DeviceProfile* findDeviceProfile(const char* macAddress, const char* devic
       if (strstr(deviceName, "IINE") || strstr(deviceName, "iine") ||
           strstr(deviceName, "IINE_control") || strstr(deviceName, "iine_control")) {
         LOG_INF("DEV", "✓ Matched GameBrick by IINE naming: %s", deviceName);
-        return &KNOWN_DEVICES[0];
+        if (const DeviceProfile* profile = findKnownProfileByName("IINE Game Brick")) {
+          return profile;
+        }
       }
       
       // Match MINI_KEYBOARD variants
@@ -182,7 +198,29 @@ const DeviceProfile* findDeviceProfile(const char* macAddress, const char* devic
         if (strstr(deviceName, "KEYBOARD") || strstr(deviceName, "keyboard") || 
             strstr(deviceName, "Keyboard")) {
           LOG_INF("DEV", "✓ Matched MINI_KEYBOARD by name pattern: %s", deviceName);
-          return &KNOWN_DEVICES[1];  // Return MINI_KEYBOARD profile
+          if (const DeviceProfile* profile = findKnownProfileByName("MINI_KEYBOARD")) {
+            return profile;
+          }
+        }
+      }
+
+      // Match Free2 variants by name (Free2, Free2-M, Free 2, Free-2)
+      if (strstr(deviceName, "Free2") || strstr(deviceName, "FREE2") || strstr(deviceName, "free2") ||
+          strstr(deviceName, "Free 2") || strstr(deviceName, "FREE 2") || strstr(deviceName, "free 2") ||
+          strstr(deviceName, "Free-2") || strstr(deviceName, "FREE-2") || strstr(deviceName, "free-2")) {
+        LOG_INF("DEV", "✓ Matched Free2 by name pattern: %s", deviceName);
+        if (const DeviceProfile* profile = findKnownProfileByName("Free2-M")) {
+          return profile;
+        }
+      }
+
+      // Match Free3 variants by name (Free3, Free3-M, Free 3, Free-3)
+      if (strstr(deviceName, "Free3") || strstr(deviceName, "FREE3") || strstr(deviceName, "free3") ||
+          strstr(deviceName, "Free 3") || strstr(deviceName, "FREE 3") || strstr(deviceName, "free 3") ||
+          strstr(deviceName, "Free-3") || strstr(deviceName, "FREE-3") || strstr(deviceName, "free-3")) {
+        LOG_INF("DEV", "✓ Matched Free3 by name pattern: %s", deviceName);
+        if (const DeviceProfile* profile = findKnownProfileByName("Free3-M")) {
+          return profile;
         }
       }
     }

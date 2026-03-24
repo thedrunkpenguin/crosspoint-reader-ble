@@ -44,6 +44,9 @@ struct ConnectedDevice {
   unsigned long lastNormalizedEventMs = 0;
   uint8_t lastNormalizedKeycode = 0x00;
   bool lastNormalizedPressed = false;
+  uint16_t lastGameBrickCounter = 0xFFFF;  // For counter-freeze detection (button vs joystick)
+  uint8_t lastGameBrickActiveKey = 0x00;   // Latched first key per freeze-window (prevents overshoot misfires)
+  uint8_t gameBrickCenterPressFrames = 0;  // Centered horizontal active-frame streak (LEFT fallback)
 };
 
 class BluetoothHIDManager {
@@ -73,6 +76,7 @@ public:
   void setInputCallback(std::function<void(uint16_t keycode)> callback);
   void setLearnInputCallback(std::function<void(uint8_t keycode, uint8_t reportIndex)> callback);
   void setButtonInjector(std::function<void(uint8_t buttonIndex, bool pressed)> injector);
+  void setReaderContextCallback(std::function<bool()> callback);
   void setDebugCaptureEnabled(bool enabled) { _debugCaptureEnabled = enabled; }
   bool isDebugCaptureEnabled() const { return _debugCaptureEnabled; }
   void setBondedDevice(const std::string& address, const std::string& name = "");
@@ -111,6 +115,7 @@ private:
   std::function<void(uint16_t)> _inputCallback;
   std::function<void(uint8_t, uint8_t)> _learnInputCallback;
   std::function<void(uint8_t, bool)> _buttonInjector;
+  std::function<bool()> _readerContextCallback;
   bool _debugCaptureEnabled = false;
   std::string _bondedDeviceAddress;
   std::string _bondedDeviceName;

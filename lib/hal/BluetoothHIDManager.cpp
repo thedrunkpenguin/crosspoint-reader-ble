@@ -12,6 +12,9 @@ static const char* HID_INFO_UUID = "2A4A";
 static const char* HID_REPORT_MAP_UUID = "2A4B";
 static const char* HID_PROTOCOL_MODE_UUID = "2A4E";
 
+static constexpr uint8_t GAMEBRICK_ACTION_A_CODE = 0xF1;
+static constexpr uint8_t GAMEBRICK_ACTION_B_CODE = 0xF2;
+
 struct ReportMapHints {
   bool hasConsumerPage = false;
   bool hasKeyboardPage = false;
@@ -673,6 +676,11 @@ void BluetoothHIDManager::setButtonInjector(std::function<void(uint8_t, bool)> i
   LOG_DBG("BT", "Button injector registered");
 }
 
+void BluetoothHIDManager::setReaderContextCallback(std::function<bool()> callback) {
+  _readerContextCallback = callback;
+  LOG_DBG("BT", "Reader context callback registered");
+}
+
 void BluetoothHIDManager::setBondedDevice(const std::string& address, const std::string& name) {
   _bondedDeviceAddress = address;
   _bondedDeviceName = name;
@@ -772,21 +780,170 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
 
     // For Game Brick: press state from byte[0] bit 0
     // For standard HID keyboards: press state from keycode (non-zero = pressed)
-    if (strcmp(device->profile->name, "IINE Game Brick") == 0) {
+    if (strncmp(device->profile->name, "IINE Game Brick", 15) == 0) {
       isGameBrickProfile = true;
-      // Game Brick: accept only stable digital-button report family (0x1x).
-      // Ignore noisy transitional frames (commonly 0x2x/0x3x) that can trigger false presses.
-      const bool stableButtonReport = (pData[0] & 0xF0) == 0x10;
-      if (!stableButtonReport) {
-        LOG_DBG("BT", "Game Brick: ignoring transitional report byte[0]=0x%02X, keycode=0x%02X", pData[0], keycode);
-        // Keep the previous button state intact while skipping transitional frames.
-        // Resetting state here can create a duplicate "new press" on the next stable
-        // frame, which shows up as a double page-turn.
-        return;
+      bool gameBrickStandardMode = false;
+
+      // --- GameBrick V2 report format (confirmed via RAW captures) ---
+      // byte[0]   : frame status (0x13 pressed/active, 0x12 release tail)
+      // byte[1-2] : 16-bit cycling counter (+125/frame, ~8 ms), NOT button data
+      // byte[3]   : horizontal (X) joystick axis, center = 0x98
+      // byte[4]   : button / vertical axis
+      //               0x08 = idle / joystick center
+      //               0x07 = physical UP button (d-pad up)
+      //               0x09 = physical DOWN button (d-pad down)
+      // LEFT/RIGHT are joystick-only: byte[4]==0x08 with byte[3] offset from 0x98.
+      //
+      // IMPORTANT: ignore any pre-extracted keycode from profile byte index because
+      // byte[2] can naturally pass through 0x07/0x09 and cause false button presses.
+      keycode = 0x00;
+      keycodeIndex = 0xFF;
+
+      auto isGameBrickSupportedCode = [](uint8_t code) {
+         return code == 0x07 || code == 0x09 ||
+           code == GAMEBRICK_ACTION_A_CODE ||
+           code == GAMEBRICK_ACTION_B_CODE ||
+               code == DeviceProfiles::KEYBOARD_UP_ARROW ||
+               code == DeviceProfiles::KEYBOARD_DOWN_ARROW ||
+               code == DeviceProfiles::KEYBOARD_LEFT_ARROW ||
+               code == DeviceProfiles::KEYBOARD_RIGHT_ARROW ||
+               code == DeviceProfiles::KEYBOARD_ENTER ||
+               code == DeviceProfiles::KEYBOARD_SPACE ||
+               code == DeviceProfiles::KEYBOARD_PAGE_UP ||
+               code == DeviceProfiles::KEYBOARD_PAGE_DOWN ||
+               code == DeviceProfiles::STANDARD_PAGE_UP ||
+               code == DeviceProfiles::STANDARD_PAGE_DOWN;
+      };
+
+      // Some GameBrick C/T/H modes expose standard keyboard/consumer reports.
+      // Prefer that path when a clear standard keycode is present.
+      const ExtractedHIDKey generic = extractGenericPageTurnKeycode(pData, length);
+      auto isStandardGameBrickCode = [](uint8_t code) {
+        return code == DeviceProfiles::KEYBOARD_UP_ARROW ||
+               code == DeviceProfiles::KEYBOARD_DOWN_ARROW ||
+               code == DeviceProfiles::KEYBOARD_LEFT_ARROW ||
+               code == DeviceProfiles::KEYBOARD_RIGHT_ARROW ||
+               code == DeviceProfiles::KEYBOARD_ENTER ||
+               code == DeviceProfiles::KEYBOARD_SPACE ||
+               code == DeviceProfiles::KEYBOARD_PAGE_UP ||
+               code == DeviceProfiles::KEYBOARD_PAGE_DOWN ||
+               code == DeviceProfiles::STANDARD_PAGE_UP ||
+               code == DeviceProfiles::STANDARD_PAGE_DOWN;
+      };
+
+      if (isStandardGameBrickCode(generic.keycode)) {
+        gameBrickStandardMode = true;
+        keycode = generic.keycode;
+        keycodeIndex = generic.reportIndex;
       }
 
-      // Game Brick: byte[0] LSB indicates press state
-      isPressed = (pData[0] & 0x01) != 0;
+      if (!gameBrickStandardMode && length >= 5) {
+        // bytes[1,2] form a 16-bit LE cycling counter (~+125/frame, LE).
+        // The counter FREEZES to 0x07D0 when any physical button is pressed and
+        // remains frozen through the entire press AND release-ramp sequence.
+        // Joystick motion keeps the counter cycling freely.
+        const uint16_t counter =
+            static_cast<uint16_t>(pData[1]) | (static_cast<uint16_t>(pData[2]) << 8);
+        const bool counterFrozen = (counter == device->lastGameBrickCounter);
+        device->lastGameBrickCounter = counter;
+
+        const bool isReleaseTail = (pData[0] & 0x01) == 0;
+        const bool activeFrame = ((pData[0] & 0x01) != 0);
+        const bool isDirectionalFreezeWindow = (counter == 0x07D0);
+
+        // Clear the d-pad latch once the counter resumes cycling or a release-tail arrives.
+        if (!counterFrozen || isReleaseTail) {
+          device->lastGameBrickActiveKey = 0x00;
+        }
+        const uint8_t b4 = pData[4];
+        if (b4 == 0x07 || b4 == 0x09) {
+          const bool directionalFreezeWindow =
+              isDirectionalFreezeWindow || (counterFrozen && device->lastGameBrickActiveKey != 0x00);
+          if (directionalFreezeWindow) {
+            // D-pad UP/DOWN uses the special 0x07D0 frozen counter window.
+            // While held, the release ramp can cross the opposite code, so latch the
+            // first directional code seen until release-tail/counter-change.
+            if (device->lastGameBrickActiveKey == 0x00) {
+              device->lastGameBrickActiveKey = b4;
+            }
+            if (b4 == device->lastGameBrickActiveKey) {
+              keycode = b4;
+              keycodeIndex = 4;
+            }
+          } else {
+            // Non-0x07D0 window: treat 0x07/0x09 as A/B button family.
+            keycode = (b4 == 0x07) ? GAMEBRICK_ACTION_A_CODE : GAMEBRICK_ACTION_B_CODE;
+            keycodeIndex = 4;
+          }
+          device->gameBrickCenterPressFrames = 0;
+        } else if (b4 == 0x08) {
+          // Joystick horizontal:
+          // - usually appears while counter is cycling
+          // - can also appear in some frozen windows for horizontal-only presses
+          //
+          // But while vertical d-pad latch (0x07/0x09 in 0x07D0 window) is active,
+          // b4==0x08 frames are release/overshoot noise and must be ignored.
+          const bool allowHorizontal = !counterFrozen || device->lastGameBrickActiveKey == 0x00;
+          if (!allowHorizontal) {
+            // Transitional frame from vertical press/release.
+            keycode = 0x00;
+            device->gameBrickCenterPressFrames = 0;
+          } else {
+            const int dx = static_cast<int>(pData[3]) - 0x98;
+            // Empirical tuning from logs:
+            // RIGHT tends to be stronger than LEFT on some units, so keep LEFT
+            // threshold lower to catch weak positive deflections.
+            constexpr int kDeadzoneRight = 2;
+            constexpr int kDeadzoneLeft = 0;
+            if (dx < -kDeadzoneRight) {
+              keycode = DeviceProfiles::KEYBOARD_RIGHT_ARROW;
+              keycodeIndex = 3;
+              device->gameBrickCenterPressFrames = 0;
+            } else if (dx > kDeadzoneLeft) {
+              keycode = DeviceProfiles::KEYBOARD_LEFT_ARROW;
+              keycodeIndex = 3;
+              device->gameBrickCenterPressFrames = 0;
+            } else if (activeFrame && !counterFrozen && device->lastGameBrickActiveKey == 0x00) {
+              // Some GameBrick units appear to emit LEFT as a centered b4==0x08 burst
+              // (dx≈0) with a cycling counter. Require several consecutive frames so
+              // transitional noise from other keys is ignored.
+              if (device->gameBrickCenterPressFrames < 255) {
+                device->gameBrickCenterPressFrames++;
+              }
+              if (device->gameBrickCenterPressFrames >= 6) {
+                keycode = DeviceProfiles::KEYBOARD_LEFT_ARROW;
+                keycodeIndex = 3;
+              }
+            } else {
+              device->gameBrickCenterPressFrames = 0;
+            }
+            // else: centered idle → keycode stays 0x00
+          }
+        } else {
+          device->gameBrickCenterPressFrames = 0;
+        }
+        // All other byte[4] values (ramp overshoot > 0x09 or < 0x07) → 0x00.
+      }
+
+      // If nothing found, keycode stays 0x00 → treated as release.
+
+      // Game Brick: accept only stable digital-button report family (0x1x).
+      // Ignore noisy transitional frames (commonly 0x2x/0x3x) that can trigger false presses.
+      if (gameBrickStandardMode) {
+        isPressed = (keycode != 0x00) && isGameBrickSupportedCode(keycode);
+      } else {
+        const bool stableButtonReport = (pData[0] & 0xF0) == 0x10;
+        if (!stableButtonReport) {
+          LOG_DBG("BT", "Game Brick: ignoring transitional report byte[0]=0x%02X, keycode=0x%02X", pData[0], keycode);
+          // Keep the previous button state intact while skipping transitional frames.
+          // Resetting state here can create a duplicate "new press" on the next stable
+          // frame, which shows up as a double page-turn.
+          return;
+        }
+
+        // Press is only valid with a supported decoded code plus active frame bit.
+        isPressed = ((pData[0] & 0x01) != 0) && isGameBrickSupportedCode(keycode);
+      }
 
       // Prevent initial stale pressed frame right after subscribe from triggering navigation.
       // Only allow presses after at least one clean release frame has been seen.
@@ -794,14 +951,25 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
         if (!isPressed) {
           device->hasSeenRelease = true;
         } else {
-          LOG_DBG("BT", "Game Brick: ignoring startup pressed frame keycode=0x%02X", keycode);
-          device->lastButtonState = true;
-          device->lastHIDKeycode = keycode;
-          return;
+          // Some GameBrick variants do not emit an immediate release frame after
+          // connect and would otherwise be blocked indefinitely. Arm input on
+          // the first valid GameBrick press instead of discarding it.
+          device->hasSeenRelease = true;
+          LOG_DBG("BT", "Game Brick: arming on first valid press keycode=0x%02X", keycode);
         }
       }
 
-      LOG_DBG("BT", "Game Brick: byte[0]=0x%02X, keycode=0x%02X, pressed=%d", pData[0], keycode, isPressed);
+      {
+        // Full raw dump so we can reverse-engineer D-pad encoding.
+        char rawBuf[64];
+        int pos = 0;
+        for (size_t ri = 0; ri < length && ri < 8 && pos < 56; ri++) {
+          pos += snprintf(rawBuf + pos, sizeof(rawBuf) - pos, "%02X ", pData[ri]);
+        }
+        LOG_DBG("BT", "Game Brick RAW[%u]: %s=> keycode=0x%02X idx=%u pressed=%d",
+                static_cast<unsigned>(length), rawBuf, keycode,
+                static_cast<unsigned>(keycodeIndex), isPressed);
+      }
     } else {
       // Standard HID keyboards/custom profiles: keycode non-zero = pressed.
       // Normalise 0xFF (= "nothing found in report") to 0x00 so that short
@@ -892,6 +1060,64 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
 
   const uint8_t mappedButton = isPressed ? g_instance->mapKeycodeToButton(keycode, device) : 0xFF;
 
+  if (isGameBrickProfile && g_instance->_debugCaptureEnabled && isPressed) {
+    const char* keyLabel = "Unknown";
+    switch (keycode) {
+      case DeviceProfiles::KEYBOARD_UP_ARROW:
+        keyLabel = "DPad Up";
+        break;
+      case DeviceProfiles::KEYBOARD_DOWN_ARROW:
+        keyLabel = "DPad Down";
+        break;
+      case DeviceProfiles::KEYBOARD_LEFT_ARROW:
+        keyLabel = "DPad Left";
+        break;
+      case DeviceProfiles::KEYBOARD_RIGHT_ARROW:
+        keyLabel = "DPad Right";
+        break;
+      case GAMEBRICK_ACTION_A_CODE:
+        keyLabel = "A";
+        break;
+      case GAMEBRICK_ACTION_B_CODE:
+        keyLabel = "B";
+        break;
+      case 0x07:
+        keyLabel = "Up";
+        break;
+      case 0x09:
+        keyLabel = "Down";
+        break;
+      default:
+        break;
+    }
+
+    const char* actionLabel = "Unmapped";
+    switch (mappedButton) {
+      case HalGPIO::BTN_UP:
+        actionLabel = "Up/PageBack";
+        break;
+      case HalGPIO::BTN_DOWN:
+        actionLabel = "Down/PageForward";
+        break;
+      case HalGPIO::BTN_LEFT:
+        actionLabel = "Left";
+        break;
+      case HalGPIO::BTN_RIGHT:
+        actionLabel = "Right";
+        break;
+      case HalGPIO::BTN_CONFIRM:
+        actionLabel = "Select";
+        break;
+      case HalGPIO::BTN_BACK:
+        actionLabel = "Back";
+        break;
+      default:
+        break;
+    }
+
+    LOG_INF("BTDBG", "GameBrick %s (0x%02X) -> %s", keyLabel, keycode, actionLabel);
+  }
+
   if (!isPressed || mappedButton == 0xFF) {
     releaseInjectedButton();
   } else {
@@ -905,8 +1131,30 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
         LOG_DBG("BT", "Game Brick: debouncing duplicate key 0x%02X (%lu ms)", keycode,
                 millis() - device->lastInjectionTime);
       } else {
-      String buttonName = (mappedButton == HalGPIO::BTN_DOWN) ? "PageForward" : "PageBack";
-      LOG_INF("BT", "Mapped key 0x%02X -> %s", keycode, buttonName.c_str());
+      const char* buttonName = "Unknown";
+      switch (mappedButton) {
+        case HalGPIO::BTN_UP:
+          buttonName = "Up/PageBack";
+          break;
+        case HalGPIO::BTN_DOWN:
+          buttonName = "Down/PageForward";
+          break;
+        case HalGPIO::BTN_LEFT:
+          buttonName = "Left";
+          break;
+        case HalGPIO::BTN_RIGHT:
+          buttonName = "Right";
+          break;
+        case HalGPIO::BTN_CONFIRM:
+          buttonName = "Select";
+          break;
+        case HalGPIO::BTN_BACK:
+          buttonName = "Back";
+          break;
+        default:
+          break;
+      }
+      LOG_INF("BT", "Mapped key 0x%02X -> %s", keycode, buttonName);
       g_instance->_buttonInjector(mappedButton, true);
       device->activeInjectedButton = mappedButton;
       device->lastInjectionTime = millis();
@@ -959,6 +1207,64 @@ uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, ConnectedDevice
   
   // If we have a device profile, ONLY map keycodes specific to that profile
   if (profile) {
+    if (strncmp(profile->name, "IINE Game Brick", 15) == 0) {
+      bool inReaderContext = false;
+      if (_readerContextCallback) {
+        inReaderContext = _readerContextCallback();
+      }
+
+      // Synthetic A/B mapping:
+      // - Menus: A=Confirm, B=Back
+      // - Reader: A=PageForward, B=PageBack
+      if (keycode == GAMEBRICK_ACTION_A_CODE) {
+        return inReaderContext ? HalGPIO::BTN_DOWN : HalGPIO::BTN_CONFIRM;
+      }
+
+      if (keycode == GAMEBRICK_ACTION_B_CODE) {
+        return inReaderContext ? HalGPIO::BTN_UP : HalGPIO::BTN_BACK;
+      }
+
+      // Physical UP button (byte[4]=0x07 = profile->pageDownCode).
+      // Maps to BTN_UP in all contexts: navigate up in menus, page-back in reader.
+      if (keycode == profile->pageDownCode) {
+        return HalGPIO::BTN_UP;
+      }
+
+      // Physical DOWN button (byte[4]=0x09 = profile->pageUpCode).
+      // Maps to BTN_DOWN in all contexts: navigate down in menus, page-forward in reader.
+      if (keycode == profile->pageUpCode) {
+        return HalGPIO::BTN_DOWN;
+      }
+
+      // Keyboard/consumer-mode directional mappings (C/T/H mode variants).
+      if (keycode == DeviceProfiles::KEYBOARD_UP_ARROW ||
+          keycode == DeviceProfiles::KEYBOARD_PAGE_UP ||
+          keycode == DeviceProfiles::STANDARD_PAGE_DOWN) {
+        return HalGPIO::BTN_UP;
+      }
+
+      if (keycode == DeviceProfiles::KEYBOARD_DOWN_ARROW ||
+          keycode == DeviceProfiles::KEYBOARD_PAGE_DOWN ||
+          keycode == DeviceProfiles::STANDARD_PAGE_UP) {
+        return HalGPIO::BTN_DOWN;
+      }
+
+      // Joystick LEFT/RIGHT (decoded from byte[3] offset when byte[4]=0x08).
+      // In non-reader context: emit true LEFT/RIGHT so activities can decide
+      // behavior (many menus already treat LEFT/RIGHT as prev/next via ButtonNavigator).
+      // In reader context: suppress to avoid accidental exits/actions.
+      if (!inReaderContext) {
+        if (keycode == DeviceProfiles::KEYBOARD_LEFT_ARROW) return HalGPIO::BTN_LEFT;
+        if (keycode == DeviceProfiles::KEYBOARD_RIGHT_ARROW) return HalGPIO::BTN_RIGHT;
+      }
+
+      if (keycode == DeviceProfiles::KEYBOARD_ENTER || keycode == DeviceProfiles::KEYBOARD_SPACE) {
+        return HalGPIO::BTN_CONFIRM;
+      }
+
+      return 0xFF;
+    }
+
     if (keycode == profile->pageUpCode) {
       LOG_INF("BT", "Matched profile pageUpCode 0x%02X (%s) -> PageBack", keycode, profile->name);
       return HalGPIO::BTN_UP;
@@ -1060,6 +1366,20 @@ void BluetoothHIDManager::updateActivity() {
     return;
   }
   lastMaintenanceCheck = now;
+
+  // Release any stale injected virtual button if reports have gone silent.
+  // This prevents stuck navigation/page-turn when a remote powers off or drops.
+  for (auto& device : _connectedDevices) {
+    if (device.activeInjectedButton != 0xFF && now - device.lastActivityTime > 250) {
+      if (_buttonInjector) {
+        _buttonInjector(device.activeInjectedButton, false);
+      }
+      device.activeInjectedButton = 0xFF;
+      device.lastButtonState = false;
+      device.lastHIDKeycode = 0x00;
+      LOG_DBG("BT", "Released stale injected button for %s", device.address.c_str());
+    }
+  }
 
   // Check for one inactive connection and disconnect it in-place.
   std::string inactiveAddress;

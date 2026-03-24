@@ -43,6 +43,10 @@ struct DeviceProfile {
 
 // Known device profiles (database of popular page turners)
 constexpr DeviceProfile KNOWN_DEVICES[] = {
+  // IINE Game Brick variant seen with MAC prefix 60:4d:ec.
+  // Uses a 5-byte report format with directional state encoded in non-standard bytes.
+  {"IINE Game Brick V2", "60:4d:ec", 0x09, 0x07, false, 2, true},
+
     // IINE Game Brick - specific keycodes in byte[4] with bitmask press-state.
     // strictProfile=true: the custom user profile must NOT override this device.
     {"IINE Game Brick", nullptr, 0x09, 0x07, false, 4, true},
@@ -56,6 +60,12 @@ constexpr DeviceProfile KNOWN_DEVICES[] = {
 
     // Generic Free2-style device pattern - standard HID Consumer Page
     {"Free2 Style", nullptr, STANDARD_PAGE_UP, STANDARD_PAGE_DOWN, true, 2, false},
+
+    // Free2-M page turner (common keyboard-mode mapping)
+    {"Free2-M", nullptr, 0x02, 0x01, false, 2, false},
+
+    // Free3-M page turner (confirmed working keycodes from setup wizard)
+    {"Free3-M", nullptr, 0x02, 0x01, false, 2, false},
 };
 
 constexpr int KNOWN_DEVICES_COUNT = sizeof(KNOWN_DEVICES) / sizeof(KNOWN_DEVICES[0]);
