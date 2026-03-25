@@ -11,7 +11,20 @@ fully-featured, open-source replacement firmware with additional quality-of-life
 
 ## Release Highlights
 
-### v1.1.1.10-ble (latest)
+### v1.1.1-ble.12 (latest)
+
+- **Firmware downloads**:
+  - Single image: [crosspoint-reader-ble-v1.1.1-ble.12-firmware.bin](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.12/crosspoint-reader-ble-v1.1.1-ble.12-firmware.bin)
+  - Full flash bundle (bootloader + partitions + firmware + instructions): [crosspoint-reader-ble-v1.1.1-ble.12-full-flash.zip](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.12/crosspoint-reader-ble-v1.1.1-ble.12-full-flash.zip)
+  - Checksums: [SHA256SUMS.txt](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.12/SHA256SUMS.txt)
+- **RPG: Companions of the Lance overhaul** inspired by Dragonlance + Neverwinter tone and structure.
+- **D&D 5e mechanics integrated**: proficiency bonus scaling, corrected class hit-dice progression, and full XP thresholds.
+- **Combat update**: Rogue/Ranger attacks now use DEX where appropriate.
+- **New enemy ladder and bosses**: kobolds, draconians, wights, drow scouts, and a young dragon capstone encounter.
+- **Narrative refresh**: Inn of the Last Home, Solace, and Darken Wood replace generic location text.
+- **BLE/HID stability improvements** preserved from prior versions.
+
+### v1.1.1.10-ble
 
 - **IINE Game Brick full D-pad support**: Up, Down, Left, Right, A and B buttons all decode correctly in both menu and reader contexts.
 - Fixes **A-button → Up cross-trigger** that caused unintended upward navigation when pressing A on the Game Brick.
