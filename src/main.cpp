@@ -379,7 +379,7 @@ void setup() {
       gpio.setVirtualButtonState(buttonIndex, pressed);
     });
     btMgr.setReaderContextCallback([]() {
-      return currentActivity && currentActivity->isReaderActivity();
+      return currentActivity && currentActivity->isReaderPageContext();
     });
     btMgr.setBondedDevice(SETTINGS.bleBondedDeviceAddr, SETTINGS.bleBondedDeviceName);
     LOG_INF("MAIN", "Bluetooth HID initialized with button injection");

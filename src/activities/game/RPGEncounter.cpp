@@ -2,14 +2,17 @@
 
 namespace rpg {
 
-// Enemy definitions
+// Enemy definitions — Inspired by D&D 5e Basic Rules, Dragonlance, and Neverwinter Saga
+// Stats: id, name, level, maxHp, hp, AC, damage, experienceReward, goldReward
 Enemy ENEMIES[] = {
-    {1, "Goblin", 1, 7, 7, 12, 4, 100, 15},
-    {2, "Orc", 2, 15, 15, 11, 6, 200, 30},
-    {3, "Troll", 3, 30, 30, 13, 8, 500, 75},
-    {4, "Skeleton", 1, 5, 5, 10, 3, 50, 10},
-    {5, "Vampire", 4, 40, 40, 15, 10, 1000, 150},
-    {6, "Dragon", 5, 100, 100, 18, 15, 2000, 500},
+    {1, "Kobold",       1,   5,   5,  12,  2,   50,   8},   // CR 1/8 — dragon-army scout
+    {2, "Goblin",       1,   7,   7,  15,  4,  100,  12},   // CR 1/4 — Blackwood raider
+    {3, "Draconian",    2,  22,  22,  14,  7,  200,  30},   // Baaz draconian, Dragon Army
+    {4, "Skeleton",     2,  13,  13,  13,  5,  100,  15},   // Undead remnant, necrotic
+    {5, "Hobgoblin",    3,  27,  27,  18,  8,  300,  45},   // CR 1 — disciplined soldier
+    {6, "Wight",        4,  45,  45,  14, 10,  700, 100},   // CR 3 — undead from Neverwinter
+    {7, "Drow Scout",   5,  60,  60,  16, 12, 1200, 175},   // Salvatore's dark elves
+    {8, "Young Dragon", 6, 110, 110,  17, 16, 2500, 500},   // Dragonlance — chromatic dragon
 };
 
 int ENEMY_COUNT = sizeof(ENEMIES) / sizeof(ENEMIES[0]);
@@ -24,107 +27,110 @@ Enemy* getEnemy(uint8_t enemyId) {
   return nullptr;
 }
 
-// Encounter definitions
+// Encounter choices
 const Choice TAVERN_CHOICES[] = {
-  {"Head toward the Blackwood", 2, 0x00000001},
-  {"Visit the market merchant", 3, 0x00000002},
-  {"Rest by the hearth", 4, 0x00000004},
+  {"Set out for the Darken Wood",    2, 0x00000001},
+  {"Visit the crossroads merchant",  3, 0x00000002},
+  {"Rest by the inn hearthfire",     4, 0x00000004},
 };
 
 const Choice FOREST_CHOICES[] = {
-  {"Follow the rustling trail", 5, 0x00000010},
-  {"Set up a cautious camp", 4, 0x00000020},
-  {"Return to the tavern", 1, 0x00000040},
+  {"Press forward through the wood", 5, 0x00000010},
+  {"Make camp and watch the dark",   4, 0x00000020},
+  {"Return to Solace",               1, 0x00000040},
 };
 
 const Choice GOBLIN_CHOICES[] = {
-  {"Take the goblin satchel", 8, 0x00000100},
-  {"Spare the wounded goblin", 7, 0x00000200},
+  {"Search the fallen foe's pack",   8, 0x00000100},
+  {"Show quarter to the wounded",    7, 0x00000200},
 };
 
 const Choice MERCY_CHOICES[] = {
-  {"Track the goblin's hidden path", 2, 0x00000400},
-  {"Return to town", 1, 0x00000800},
+  {"Follow the hidden trail",        2, 0x00000400},
+  {"Return to Solace",               1, 0x00000800},
 };
 
 const Choice LOOT_CHOICES[] = {
-  {"Return to town with loot", 1, 0x00001000},
-  {"Press deeper into Blackwood", 2, 0x00002000},
+  {"Return to Solace with the spoils", 1, 0x00001000},
+  {"Press deeper into the wood",       2, 0x00002000},
 };
 
 Encounter ENCOUNTERS[] = {
   {1,
-   "Ashwick Tavern",
+   "Inn of the Last Home",
    EncounterType::Story,
-   "Rain taps against oak shutters while old adventurers mutter over stale ale.\n"
-   "A hand-drawn map of Blackwood lies beside your mug, marked with clawed symbols.\n\n"
-   "Tonight, your story begins.",
+   "Autumn rain drums on the vallenwood canopy while old companions share dark rumors.\n"
+   "A hand-drawn map of the Darken Wood rests beside a cooling mug.\n\n"
+   "The Dragon Army marches east. Your journey begins tonight.",
    TAVERN_CHOICES,
    3,
    nullptr,
    nullptr,
    nullptr},
   {2,
-   "Blackwood Edge",
+   "The Darken Wood",
    EncounterType::Story,
-   "Mist curls between ancient pines. The scent of wet soil and smoke lingers in the air.\n"
-   "Somewhere ahead, something small and dangerous is moving through the brush.",
+   "Ancient pines close overhead along the old elven road to Qualinesti.\n"
+   "Somewhere ahead, armored footfalls echo through mist-wrapped shadows.",
    FOREST_CHOICES,
    3,
    nullptr,
    nullptr,
    nullptr},
   {3,
-   "Wandering Merchant",
+   "Crossroads Merchant",
    EncounterType::Merchant,
-   "Under a patched crimson awning, a merchant polishes steel and whispers:\n"
-   "\"Coin for survival, friend. Potions for blood. Scrolls for fire.\"",
+   "Under a patched cloak beside a battered wagon, a traveling merchant mutters:\n"
+   "\"War makes fine customers. Potions for silver, scrolls for gold.\"",
    nullptr,
    0,
    nullptr,
    nullptr,
    nullptr},
   {4,
-   "Campfire Rest",
+   "Waystone Rest",
    EncounterType::RestSite,
-   "You build a small fire beside an old rune-carved stone.\n"
-   "Warmth returns to your hands as night birds call beyond the trees.",
+   "You shelter beside an ancient waystone carved with Solamnic script.\n"
+   "Warmth returns as the night wind calls through the pines.",
    nullptr,
    0,
    nullptr,
    nullptr,
    nullptr},
   {5,
-   "Goblin Ambush",
+   "Ambush in the Wood",
    EncounterType::Combat,
-   "A jagged blade flashes from the brush. A goblin raider hisses and charges!",
+   "Steel glints in the shadows. The creature charges from the treeline!",
    nullptr,
    0,
    (Enemy*)&ENEMIES[0],
    nullptr,
    nullptr},
   {6,
-   "After the Clash",
+   "After the Skirmish",
    EncounterType::Story,
-   "The goblin collapses in the mud. A small satchel tumbles free, packed with rough coins and bone charms.",
+   "Your foe staggers and falls onto autumn leaves. A worn pack tumbles free,\n"
+   "heavy with coins and the smell of alchemist's glass.",
    GOBLIN_CHOICES,
    2,
    nullptr,
    nullptr,
    nullptr},
   {7,
-   "Merciful Path",
+   "A Moment of Mercy",
    EncounterType::Story,
-   "You lower your blade. The goblin stares in disbelief, then gestures to a hidden trail before slipping away.",
+   "You lower your blade. The creature stares in stunned disbelief, then stumbles\n"
+   "away into the pines, pointing toward a hidden trail before vanishing.",
    MERCY_CHOICES,
    2,
    nullptr,
    nullptr,
    nullptr},
   {8,
-   "Spoils of Blackwood",
+   "Spoils of the Wood",
    EncounterType::Story,
-   "Inside the satchel you find old silver, a cracked ring, and a charcoal map fragment pointing deeper into the forest.",
+   "Inside the fallen pack: tarnished coins, a healing draught corked in blue wax,\n"
+   "and a strange tonic sealed with dark pitch.",
    LOOT_CHOICES,
    2,
    nullptr,

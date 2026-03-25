@@ -24,7 +24,10 @@ class RPGActivity final : public Activity {
   };
 
   Screen currentScreen = Screen::CharacterSelection;
+  Screen inventoryReturnScreen = Screen::MainMenu;
   int selectedIndex = 0;
+  int previousSelectedIndex = 0;
+  int merchantSelectedInventoryIndex = 0;
 
   // Rendering
   TaskHandle_t displayTaskHandle = nullptr;
@@ -49,6 +52,9 @@ class RPGActivity final : public Activity {
   uint8_t currentEncounterId = 1;
   bool saveExists = false;
   std::string narrativeText;
+  uint32_t lastRewardExperience = 0;
+  uint16_t lastRewardGold = 0;
+  std::string lastRewardItemsText;
 
   // Callbacks
   const std::function<void()> onBack;
@@ -76,10 +82,18 @@ class RPGActivity final : public Activity {
   void increaseDepthProgression();
   bool maybeTriggerVaultEncounter();
   bool addItemToInventory(uint8_t itemId, uint8_t quantity = 1);
+  void recomputeArmorClass();
+  int findInventoryIndexByItemId(uint8_t itemId) const;
+  bool consumeInventoryItemAt(int inventoryIndex, uint8_t quantity = 1);
+  bool useInventoryItemAt(int inventoryIndex);
+  bool equipInventoryItemAt(int inventoryIndex);
+  void openInventoryFrom(Screen returnScreen);
+  void handleInventoryInput();
   bool saveGame();
   bool loadGame();
   void refreshSaveState();
   void setNarrative(const std::string& text);
+  void setRewardSummary(uint32_t experience, uint16_t gold, const std::string& itemsText = "");
 
  public:
   explicit RPGActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::function<void()>& onBack)

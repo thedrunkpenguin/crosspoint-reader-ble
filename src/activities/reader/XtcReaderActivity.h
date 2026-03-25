@@ -35,4 +35,5 @@ class XtcReaderActivity final : public ActivityWithSubactivity {
   void onExit() override;
   void loop() override;
   void render(Activity::RenderLock&&) override;
+  bool isReaderPageContext() const override { return subActivity == nullptr; }
 };

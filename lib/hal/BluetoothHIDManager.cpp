@@ -717,6 +717,29 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   }
   
   if (!device) return;
+
+  const unsigned long nowMs = millis();
+
+  // GameBrick can occasionally miss a release tail, leaving a virtual button
+  // latched as pressed. After a long idle gap, clear stale hold state so the
+  // next tap is always treated as a fresh press.
+  if (device->profile && strncmp(device->profile->name, "IINE Game Brick", 15) == 0) {
+    constexpr unsigned long STALE_GAMEBRICK_HOLD_RESET_MS = 600;
+    if (device->activeInjectedButton != 0xFF &&
+        device->lastNormalizedEventMs > 0 &&
+        (nowMs - device->lastNormalizedEventMs) > STALE_GAMEBRICK_HOLD_RESET_MS) {
+      if (g_instance->_buttonInjector) {
+        g_instance->_buttonInjector(device->activeInjectedButton, false);
+      }
+      device->activeInjectedButton = 0xFF;
+      device->lastButtonState = false;
+      device->lastHIDKeycode = 0x00;
+      device->lastNormalizedPressed = false;
+      device->lastGameBrickActiveKey = 0x00;
+      device->gameBrickCenterPressFrames = 0;
+      LOG_DBG("BT", "Game Brick: cleared stale held state after %lu ms idle", nowMs - device->lastNormalizedEventMs);
+    }
+  }
   
   // Update activity timestamp to keep connection alive
   device->lastActivityTime = millis();
@@ -872,6 +895,7 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
             }
           } else {
             // Non-0x07D0 window: treat 0x07/0x09 as A/B button family.
+            // This preserves menu semantics (A=Select, B=Back) outside page-reading context.
             keycode = (b4 == 0x07) ? GAMEBRICK_ACTION_A_CODE : GAMEBRICK_ACTION_B_CODE;
             keycodeIndex = 4;
           }
@@ -1036,7 +1060,18 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   bool isNewPressEvent =
       isPressed && (!device->lastButtonState || (!isGameBrickProfile && keycode != device->lastHIDKeycode));
 
-  const unsigned long nowMs = millis();
+  if (isGameBrickProfile && isPressed && !isNewPressEvent && keycode == device->lastHIDKeycode &&
+      device->lastNormalizedEventMs > 0) {
+    constexpr unsigned long GAMEBRICK_REPRESS_IDLE_MS = 220;
+    if ((nowMs - device->lastNormalizedEventMs) > GAMEBRICK_REPRESS_IDLE_MS) {
+      isNewPressEvent = true;
+      device->lastButtonState = false;
+      device->lastNormalizedPressed = false;
+      LOG_DBG("BT", "Game Brick: promoting same-key re-press after %lu ms idle (key=0x%02X)",
+              nowMs - device->lastNormalizedEventMs, keycode);
+    }
+  }
+
   if (isNewPressEvent && device->lastNormalizedPressed && device->lastNormalizedKeycode == keycode &&
       (nowMs - device->lastNormalizedEventMs) < 90) {
     isNewPressEvent = false;

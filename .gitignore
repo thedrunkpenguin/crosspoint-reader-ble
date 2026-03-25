@@ -20,3 +20,8 @@ scripts/*.epub
 # OS artifacts
 .DS_Store
 Thumbs.db
+
+# Source/reference files not part of the build
+*.epub
+*.png
+*.bak

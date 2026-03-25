@@ -14,6 +14,9 @@ class ActivityWithSubactivity : public Activity {
   explicit ActivityWithSubactivity(std::string name, GfxRenderer& renderer, MappedInputManager& mappedInput)
       : Activity(std::move(name), renderer, mappedInput) {}
   void loop() override;
+  bool isReaderPageContext() const override {
+    return subActivity ? subActivity->isReaderPageContext() : Activity::isReaderPageContext();
+  }
   // Note: when a subactivity is active, parent requestUpdate() calls are ignored;
   // the subactivity should request its own renders. This pauses parent rendering until exit.
   void requestUpdate() override;

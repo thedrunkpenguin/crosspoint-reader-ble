@@ -40,6 +40,11 @@ struct Character {
   CharacterStats stats;
 
   uint16_t armorClass;
+  uint16_t baseArmorClass;
+
+  static constexpr uint8_t NO_EQUIPPED_ITEM = 0xFF;
+  uint8_t equippedWeaponId = NO_EQUIPPED_ITEM;
+  uint8_t equippedArmorId = NO_EQUIPPED_ITEM;
 
   // Inventory (simplified - max 12 items)
   static constexpr int MAX_INVENTORY = 12;
@@ -59,6 +64,7 @@ struct Character {
   void addExperience(uint32_t amount);
   bool levelUp();
   uint32_t experienceForNextLevel() const;
+  uint8_t proficiencyBonus() const;
 };
 
 const char* classToString(CharacterClass charClass);
