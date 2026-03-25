@@ -9,6 +9,9 @@ fully-featured, open-source replacement firmware with additional quality-of-life
 
 ![](./docs/images/cover.jpg)
 
+**NOTE** there can be ghosting due to memory with the bluetooth enabled. Changing to 1 page refresh helps. I've also noticed moving the cursor a few times will get it to refresh. I am working on better performance. I've noticed running my epubs through the optimizer (https://epubdev.pages.dev/) gets a better performance. 
+If your remote connects but buttons do not work, try custom key mapping. If it still does not work then there is a debug you can turn on and take a picture of it and upload here and I can try to get your device working. I've had confirmation the Free 3 and a few other devices work along with the gamebrick and gugxiom keypad. I will have a free 2 soon to do additional testing and hard code the Free devices to work when paired. 
+
 ## Release Highlights
 
 ### v1.1.1-ble.12 (latest)
@@ -184,14 +187,8 @@ This project is **not affiliated with Xteink**; it's built as a community projec
 
 ### Mini-Games
 - **Deep Mines** — randomly generated dungeon maze to navigate
-- **Golf Solitaire** — clear all cards from a seven-column tableau
-- **Chess** — full two-player chess on the e-ink display
-- **Caro (Gomoku)** — five-in-a-row strategy game
-- **Sudoku** — classic number puzzle
-- **Minesweeper** — mine-clearing puzzle
-- **2048** — tile-merging number game
-- **Snake** — classic snake
-- **Game of Life** — Conway's cellular automaton
+- **Solitaire**
+- **Fantasy RPG** — text based rpg
 
 ### UI Themes
 - **Lyra** — clean, modern home screen layout with cover art (default)
