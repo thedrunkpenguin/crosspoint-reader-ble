@@ -2,7 +2,14 @@
 
 #include <HalStorage.h>
 
+#include <string>
+
 #include "PetSpriteData.h"
+
+namespace {
+std::string gLastMissingPetSpritePath;
+std::string gLastMissingMiniSpritePath;
+}
 
 uint8_t PetSpriteRenderer::spriteBuffer[PetSpriteRenderer::SPRITE_BYTES];
 
@@ -85,16 +92,23 @@ void PetSpriteRenderer::drawPet(GfxRenderer& renderer,
   if (variant > 0) {
     snprintf(path, sizeof(path), "/.crosspoint/pet/sprites/%s_v%d_%s.bin", stageName(stage), static_cast<int>(variant),
              moodName(mood));
-    if (loadSprite(path, SPRITE_BYTES) == SPRITE_BYTES && scale == 1) {
+    if (gLastMissingPetSpritePath != path && loadSprite(path, SPRITE_BYTES) == SPRITE_BYTES && scale == 1) {
+      gLastMissingPetSpritePath.clear();
       renderer.drawImage(spriteBuffer, x, y, SPRITE_W, SPRITE_H);
       return;
+    } else if (gLastMissingPetSpritePath != path) {
+      gLastMissingPetSpritePath = path;
     }
   }
 
   snprintf(path, sizeof(path), "/.crosspoint/pet/sprites/%s_%s.bin", stageName(stage), moodName(mood));
-  if (loadSprite(path, SPRITE_BYTES) == SPRITE_BYTES && scale == 1) {
+  if (gLastMissingPetSpritePath != path && loadSprite(path, SPRITE_BYTES) == SPRITE_BYTES && scale == 1) {
+    gLastMissingPetSpritePath.clear();
     renderer.drawImage(spriteBuffer, x, y, SPRITE_W, SPRITE_H);
   } else {
+    if (gLastMissingPetSpritePath != path) {
+      gLastMissingPetSpritePath = path;
+    }
     drawFallback(renderer, x, y, scale, stage, variant, petType, animFrame);
   }
 }
@@ -111,16 +125,23 @@ void PetSpriteRenderer::drawMini(GfxRenderer& renderer,
   if (variant > 0) {
     snprintf(path, sizeof(path), "/.crosspoint/pet/sprites/mini/%s_v%d_%s.bin", stageName(stage), static_cast<int>(variant),
              moodName(mood));
-    if (loadSprite(path, MINI_BYTES) == MINI_BYTES) {
+    if (gLastMissingMiniSpritePath != path && loadSprite(path, MINI_BYTES) == MINI_BYTES) {
+      gLastMissingMiniSpritePath.clear();
       renderer.drawImage(spriteBuffer, x, y, MINI_W, MINI_H);
       return;
+    } else if (gLastMissingMiniSpritePath != path) {
+      gLastMissingMiniSpritePath = path;
     }
   }
 
   snprintf(path, sizeof(path), "/.crosspoint/pet/sprites/mini/%s_%s.bin", stageName(stage), moodName(mood));
-  if (loadSprite(path, MINI_BYTES) == MINI_BYTES) {
+  if (gLastMissingMiniSpritePath != path && loadSprite(path, MINI_BYTES) == MINI_BYTES) {
+    gLastMissingMiniSpritePath.clear();
     renderer.drawImage(spriteBuffer, x, y, MINI_W, MINI_H);
   } else {
+    if (gLastMissingMiniSpritePath != path) {
+      gLastMissingMiniSpritePath = path;
+    }
     drawFallback(renderer, x, y, 1, stage, variant, petType, 0);
   }
 }

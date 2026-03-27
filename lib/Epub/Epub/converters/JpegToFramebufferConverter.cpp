@@ -144,6 +144,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
             int destX = config.x + (int)(srcX * scale);
             if (destX >= screenWidth || destX >= config.x + destWidth) continue;
             uint8_t gray = imageInfo.m_pMCUBufR[row * 8 + col];
+            gray = applyGrayOffset(gray, config.brightnessOffset);
             uint8_t dithered = config.useDithering ? applyBayerDither4Level(gray, destX, destY) : gray / 85;
             if (dithered > 3) dithered = 3;
             drawPixelWithRenderMode(renderer, destX, destY, dithered);
@@ -165,6 +166,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
             uint8_t g = imageInfo.m_pMCUBufG[row * 8 + col];
             uint8_t b = imageInfo.m_pMCUBufB[row * 8 + col];
             uint8_t gray = (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
+            gray = applyGrayOffset(gray, config.brightnessOffset);
             uint8_t dithered = config.useDithering ? applyBayerDither4Level(gray, destX, destY) : gray / 85;
             if (dithered > 3) dithered = 3;
             drawPixelWithRenderMode(renderer, destX, destY, dithered);
@@ -188,6 +190,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
             uint8_t g = imageInfo.m_pMCUBufG[blockIndex * 64 + pixelIndex];
             uint8_t b = imageInfo.m_pMCUBufB[blockIndex * 64 + pixelIndex];
             uint8_t gray = (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
+            gray = applyGrayOffset(gray, config.brightnessOffset);
             uint8_t dithered = config.useDithering ? applyBayerDither4Level(gray, destX, destY) : gray / 85;
             if (dithered > 3) dithered = 3;
             drawPixelWithRenderMode(renderer, destX, destY, dithered);
@@ -211,6 +214,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
             uint8_t g = imageInfo.m_pMCUBufG[blockIndex * 128 + pixelIndex];
             uint8_t b = imageInfo.m_pMCUBufB[blockIndex * 128 + pixelIndex];
             uint8_t gray = (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
+            gray = applyGrayOffset(gray, config.brightnessOffset);
             uint8_t dithered = config.useDithering ? applyBayerDither4Level(gray, destX, destY) : gray / 85;
             if (dithered > 3) dithered = 3;
             drawPixelWithRenderMode(renderer, destX, destY, dithered);
@@ -237,6 +241,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
             uint8_t g = imageInfo.m_pMCUBufG[blockOffset + pixelIndex];
             uint8_t b = imageInfo.m_pMCUBufB[blockOffset + pixelIndex];
             uint8_t gray = (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
+            gray = applyGrayOffset(gray, config.brightnessOffset);
             uint8_t dithered = config.useDithering ? applyBayerDither4Level(gray, destX, destY) : gray / 85;
             if (dithered > 3) dithered = 3;
             drawPixelWithRenderMode(renderer, destX, destY, dithered);

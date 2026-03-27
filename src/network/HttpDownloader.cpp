@@ -6,6 +6,7 @@
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <base64.h>
+#include <esp_task_wdt.h>
 
 #include <cstring>
 #include <memory>
@@ -30,6 +31,8 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent) {
   http.begin(*client, url.c_str());
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.addHeader("User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
+  http.addHeader("Accept", "*/*");
+  http.addHeader("Referer", "https://www.reddit.com/");
 
   // Add Basic HTTP auth if credentials are configured
   if (strlen(SETTINGS.opdsUsername) > 0 && strlen(SETTINGS.opdsPassword) > 0) {
@@ -64,6 +67,13 @@ bool HttpDownloader::fetchUrl(const std::string& url, std::string& outContent) {
 
 HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& url, const std::string& destPath,
                                                              ProgressCallback progress) {
+  constexpr uint32_t kHttpRequestTimeoutMs = 15000;
+  constexpr uint32_t kNoProgressTimeoutMs = 15000;
+  constexpr uint32_t kUnknownLengthTotalTimeoutMs = 60000;
+  constexpr uint32_t kMinTotalDownloadTimeoutMs = 30000;
+  constexpr uint32_t kMaxTotalDownloadTimeoutMs = 180000;
+  constexpr size_t kExpectedBytesPerSec = 25000;
+
   // Use WiFiClientSecure for HTTPS, regular WiFiClient for HTTP
   std::unique_ptr<WiFiClient> client;
   if (UrlUtils::isHttpsUrl(url)) {
@@ -79,8 +89,11 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   LOG_DBG("HTTP", "Destination: %s", destPath.c_str());
 
   http.begin(*client, url.c_str());
+  http.setTimeout(kHttpRequestTimeoutMs);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.addHeader("User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
+  http.addHeader("Accept", "*/*");
+  http.addHeader("Referer", "https://www.reddit.com/");
 
   // Add Basic HTTP auth if credentials are configured
   if (strlen(SETTINGS.opdsUsername) > 0 && strlen(SETTINGS.opdsPassword) > 0) {
@@ -98,6 +111,14 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
 
   const size_t contentLength = http.getSize();
   LOG_DBG("HTTP", "Content-Length: %zu", contentLength);
+
+  uint32_t totalDownloadTimeoutMs = kUnknownLengthTotalTimeoutMs;
+  if (contentLength > 0) {
+    const uint32_t expectedMs = static_cast<uint32_t>((contentLength * 1000ULL) / kExpectedBytesPerSec) + 8000U;
+    totalDownloadTimeoutMs = std::max(kMinTotalDownloadTimeoutMs, std::min(kMaxTotalDownloadTimeoutMs, expectedMs));
+  }
+  LOG_DBG("HTTP", "Timeout budget: total=%lu ms no-progress=%lu ms", static_cast<unsigned long>(totalDownloadTimeoutMs),
+          static_cast<unsigned long>(kNoProgressTimeoutMs));
 
   // Remove existing file if present
   if (Storage.exists(destPath.c_str())) {
@@ -126,11 +147,31 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   uint8_t buffer[DOWNLOAD_CHUNK_SIZE];
   size_t downloaded = 0;
   const size_t total = contentLength > 0 ? contentLength : 0;
+  const uint32_t startedAtMs = millis();
+  uint32_t lastProgressMs = startedAtMs;
 
   while (http.connected() && (contentLength == 0 || downloaded < contentLength)) {
+    const uint32_t nowMs = millis();
+    if (nowMs - startedAtMs > totalDownloadTimeoutMs) {
+      LOG_ERR("HTTP", "Download timeout: total=%lu ms, downloaded=%u", static_cast<unsigned long>(nowMs - startedAtMs),
+              static_cast<unsigned int>(downloaded));
+      file.close();
+      Storage.remove(destPath.c_str());
+      http.end();
+      return ABORTED;
+    }
+
     const size_t available = stream->available();
     if (available == 0) {
+      if (nowMs - lastProgressMs > kNoProgressTimeoutMs) {
+        LOG_ERR("HTTP", "Download stalled: no progress for %lu ms", static_cast<unsigned long>(nowMs - lastProgressMs));
+        file.close();
+        Storage.remove(destPath.c_str());
+        http.end();
+        return ABORTED;
+      }
       delay(1);
+      esp_task_wdt_reset();
       continue;
     }
 
@@ -151,10 +192,12 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
     }
 
     downloaded += bytesRead;
+    lastProgressMs = millis();
 
-    if (progress && total > 0) {
+    if (progress) {
       progress(downloaded, total);
     }
+    esp_task_wdt_reset();
   }
 
   file.close();

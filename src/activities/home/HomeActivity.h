@@ -25,6 +25,7 @@ class HomeActivity final : public Activity {
   const std::function<void()> onRecentsOpen;
   const std::function<void()> onSettingsOpen;
   const std::function<void()> onFileTransferOpen;
+  const std::function<void()> onSubredditOpen;
   const std::function<void()> onOpdsBrowserOpen;
   const std::function<void()> onGameOpen;
   const std::function<void()> onPetOpen;
@@ -41,7 +42,8 @@ class HomeActivity final : public Activity {
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                         const std::function<void(const std::string& path)>& onSelectBook,
                         const std::function<void()>& onMyLibraryOpen, const std::function<void()>& onRecentsOpen,
-                        const std::function<void()>& onSettingsOpen, const std::function<void()>& onFileTransferOpen,
+                        const std::function<void()>& onSettingsOpen,
+                        const std::function<void()>& onFileTransferOpen, const std::function<void()>& onSubredditOpen,
                         const std::function<void()>& onOpdsBrowserOpen, const std::function<void()>& onGameOpen,
                         const std::function<void()>& onPetOpen)
       : Activity("Home", renderer, mappedInput),
@@ -50,6 +52,7 @@ class HomeActivity final : public Activity {
         onRecentsOpen(onRecentsOpen),
         onSettingsOpen(onSettingsOpen),
         onFileTransferOpen(onFileTransferOpen),
+        onSubredditOpen(onSubredditOpen),
         onOpdsBrowserOpen(onOpdsBrowserOpen),
         onGameOpen(onGameOpen),
         onPetOpen(onPetOpen) {}

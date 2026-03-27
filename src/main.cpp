@@ -31,6 +31,7 @@
 #include "activities/home/RecentBooksActivity.h"
 #include "activities/home/VirtualPetActivity.h"
 #include "activities/network/CrossPointWebServerActivity.h"
+#include "activities/network/SubredditActivity.h"
 #include "activities/reader/ReaderActivity.h"
 #include "activities/settings/SettingsActivity.h"
 #include "activities/game/GameActivity.h"
@@ -250,6 +251,11 @@ void onGoToFileTransfer() {
   enterNewActivity(new CrossPointWebServerActivity(renderer, mappedInputManager, onGoHome));
 }
 
+void onGoToSubreddit() {
+  exitActivity();
+  enterNewActivity(new SubredditActivity(renderer, mappedInputManager, onGoHome));
+}
+
 void onGoToSettings() {
   exitActivity();
   enterNewActivity(new SettingsActivity(renderer, mappedInputManager, onGoHome));
@@ -301,10 +307,12 @@ void onGoHome() {
   exitActivity();
 #ifdef DISABLE_OPDS
   enterNewActivity(new HomeActivity(renderer, mappedInputManager, onGoToReader, onGoToMyLibrary, onGoToRecentBooks,
-                                    onGoToSettings, onGoToFileTransfer, nullptr, onGoToGame, onGoToPet));
+                                    onGoToSettings, onGoToFileTransfer, onGoToSubreddit, nullptr, onGoToGame,
+                                    onGoToPet));
 #else
   enterNewActivity(new HomeActivity(renderer, mappedInputManager, onGoToReader, onGoToMyLibrary, onGoToRecentBooks,
-                                    onGoToSettings, onGoToFileTransfer, onGoToBrowser, onGoToGame, onGoToPet));
+                                    onGoToSettings, onGoToFileTransfer, onGoToSubreddit, onGoToBrowser, onGoToGame,
+                                    onGoToPet));
 #endif
 }
 

@@ -15,6 +15,7 @@
 #include "MappedInputManager.h"
 #include "OtaUpdateActivity.h"
 #include "SettingsList.h"
+#include "SubredditSettingsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -53,6 +54,7 @@ void SettingsActivity::onEnter() {
   controlsSettings.insert(controlsSettings.begin(),
                           SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_NONE_OPT, SettingAction::SubredditReader));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_BLUETOOTH, SettingAction::Bluetooth));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
 #ifndef DISABLE_CALIBRE
@@ -211,6 +213,9 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::Network:
         enterSubActivity(new WifiSelectionActivity(renderer, mappedInput, onCompleteBool, false));
         break;
+      case SettingAction::SubredditReader:
+        enterSubActivity(new SubredditSettingsActivity(renderer, mappedInput, onComplete));
+        break;
       case SettingAction::Bluetooth:
         enterSubActivity(new BluetoothSettingsActivity(renderer, mappedInput, onComplete));
         break;
@@ -260,7 +265,14 @@ void SettingsActivity::render(Activity::RenderLock&&) {
            pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.buttonHintsHeight +
                          metrics.verticalSpacing * 2)},
       settingsCount, selectedSettingIndex - 1,
-      [&settings](int index) { return std::string(I18N.get(settings[index].nameId)); }, nullptr, nullptr,
+      [&settings](int index) {
+        const auto& setting = settings[index];
+        if (setting.type == SettingType::ACTION && setting.action == SettingAction::SubredditReader) {
+          return std::string("Subreddit Reader");
+        }
+        return std::string(I18N.get(setting.nameId));
+      },
+      nullptr, nullptr,
       [&settings](int i) {
         const auto& setting = settings[i];
         std::string valueText = "";

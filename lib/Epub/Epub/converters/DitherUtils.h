@@ -27,6 +27,13 @@ inline uint8_t applyBayerDither4Level(uint8_t gray, int x, int y) {
   return 3;
 }
 
+inline uint8_t applyGrayOffset(uint8_t gray, int8_t offset) {
+  int adjusted = static_cast<int>(gray) + static_cast<int>(offset);
+  if (adjusted < 0) return 0;
+  if (adjusted > 255) return 255;
+  return static_cast<uint8_t>(adjusted);
+}
+
 // Draw a pixel respecting the current render mode for grayscale support
 inline void drawPixelWithRenderMode(GfxRenderer& renderer, int x, int y, uint8_t pixelValue) {
   GfxRenderer::RenderMode renderMode = renderer.getRenderMode();

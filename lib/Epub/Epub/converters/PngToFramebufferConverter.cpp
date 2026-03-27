@@ -214,6 +214,7 @@ int pngDrawCallback(PNGDRAW* pDraw) {
     int outX = outXBase + dstX;
     if (outX < screenWidth) {
       uint8_t gray = ctx->grayLineBuffer[srcX];
+      gray = applyGrayOffset(gray, ctx->config->brightnessOffset);
 
       uint8_t ditheredGray;
       if (useDithering) {

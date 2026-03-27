@@ -38,7 +38,7 @@
 int HomeActivity::getMenuItemCount() const {
   int count = 0;
 
-  int actionCount = 5;  // Browse Files, File Transfer, Games, Pet, Settings
+  int actionCount = 5;  // Browse Files, Network, Games, Pet, Settings
 #ifndef DISABLE_OPDS
   if (hasOpdsUrl) {
     actionCount++;  // OPDS
@@ -449,7 +449,7 @@ void HomeActivity::render(Activity::RenderLock&&) {
 
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, nullptr);
 
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_FILE_TRANSFER), tr(STR_GAMES),
+  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), "Network", tr(STR_GAMES),
                                         tr(STR_VIRTUAL_PET), tr(STR_SETTINGS_TITLE)};
   std::vector<const uint8_t*> menuIcons = {Folder2Icon, Wifi_wideIcon, GameIcon, PetIcon, CogIcon};
 
@@ -509,7 +509,7 @@ void HomeActivity::render(Activity::RenderLock&&) {
     return;
   }
 
-  std::vector<const char*> cardsMenuItems = {tr(STR_BROWSE_FILES), tr(STR_FILE_TRANSFER), tr(STR_GAMES),
+  std::vector<const char*> cardsMenuItems = {tr(STR_BROWSE_FILES), "Network", tr(STR_GAMES),
                                              tr(STR_SETTINGS_TITLE)};
   std::vector<const uint8_t*> cardsMenuIcons = {Folder2Icon, Wifi_wideIcon, GameIcon, CogIcon};
 #ifndef DISABLE_OPDS
