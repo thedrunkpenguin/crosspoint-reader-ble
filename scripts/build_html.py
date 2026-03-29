@@ -1,8 +1,17 @@
 import os
 import re
 import gzip
+import io
 
 SRC_DIR = "src"
+
+
+def gzip_deterministic(data: bytes, compresslevel: int = 9) -> bytes:
+    """Return deterministic gzip bytes (stable across runs)."""
+    output = io.BytesIO()
+    with gzip.GzipFile(filename="", mode="wb", fileobj=output, compresslevel=compresslevel, mtime=0) as gz:
+        gz.write(data)
+    return output.getvalue()
 
 def minify_html(html: str) -> str:
     # Tags where whitespace should be preserved
@@ -44,7 +53,7 @@ for root, _, files in os.walk(SRC_DIR):
 
             # Compress with gzip (compresslevel 9 is maximum compression)
             # IMPORTANT: we don't use brotli because Firefox doesn't support brotli with insecured context (only supported on HTTPS)
-            compressed = gzip.compress(minified.encode('utf-8'), compresslevel=9)
+            compressed = gzip_deterministic(minified.encode('utf-8'), compresslevel=9)
 
             base_name = f"{os.path.splitext(file)[0]}Html"
             header_path = os.path.join(root, f"{base_name}.generated.h")

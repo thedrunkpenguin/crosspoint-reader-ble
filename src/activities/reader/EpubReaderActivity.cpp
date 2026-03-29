@@ -75,17 +75,44 @@ void EpubReaderActivity::onEnter() {
 
   FsFile f;
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[6];
-    int dataSize = f.read(data, 6);
-    if (dataSize == 4 || dataSize == 6) {
+    uint8_t data[7] = {0};
+    int dataSize = f.read(data, 7);
+    if (dataSize == 4 || dataSize == 6 || dataSize == 7) {
       currentSpineIndex = data[0] + (data[1] << 8);
       nextPageNumber = data[2] + (data[3] << 8);
       cachedSpineIndex = currentSpineIndex;
       LOG_DBG("ERS", "Loaded cache: %d, %d", currentSpineIndex, nextPageNumber);
     }
-    if (dataSize == 6) {
+    if (dataSize >= 6) {
       cachedChapterTotalPageCount = data[4] + (data[5] << 8);
     }
+
+    if (dataSize == 7) {
+      const int persistedBookPercent = data[6];
+      if (persistedBookPercent < 0 || persistedBookPercent > 100) {
+        LOG_DBG("ERS", "Ignoring corrupt cached percent: %d", persistedBookPercent);
+        currentSpineIndex = 0;
+        nextPageNumber = 0;
+        cachedSpineIndex = 0;
+        cachedChapterTotalPageCount = 0;
+      }
+    }
+
+    if (nextPageNumber == UINT16_MAX) {
+      // UINT16_MAX is used only as an in-memory sentinel while changing chapters.
+      // If it is read from disk, treat it as invalid persisted progress.
+      nextPageNumber = 0;
+    }
+
+    const int spineItemsCount = epub->getSpineItemsCount();
+    if (spineItemsCount > 0 && (currentSpineIndex < 0 || currentSpineIndex >= spineItemsCount)) {
+      LOG_DBG("ERS", "Ignoring out-of-range cached spine index: %d", currentSpineIndex);
+      currentSpineIndex = 0;
+      nextPageNumber = 0;
+      cachedSpineIndex = 0;
+      cachedChapterTotalPageCount = 0;
+    }
+
     f.close();
   }
   // We may want a better condition to detect if we are opening for the first time.
@@ -586,6 +613,12 @@ void EpubReaderActivity::render(Activity::RenderLock&& lock) {
       section->currentPage = nextPageNumber;
     }
 
+    if (section->currentPage < 0) {
+      section->currentPage = 0;
+    } else if (section->currentPage >= section->pageCount) {
+      section->currentPage = section->pageCount - 1;
+    }
+
     // handles changes in reader settings and reset to approximate position based on cached progress
     if (cachedChapterTotalPageCount > 0) {
       // only goes to relative position if spine index matches cached value
@@ -667,8 +700,8 @@ void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
   if (Storage.openFileForWrite("ERS", epub->getCachePath() + "/progress.bin", f)) {
     const uint8_t pct = static_cast<uint8_t>(bookProgressPercent < 0 ? 0 : (bookProgressPercent > 100 ? 100 : bookProgressPercent));
     uint8_t data[7];
-    data[0] = currentSpineIndex & 0xFF;
-    data[1] = (currentSpineIndex >> 8) & 0xFF;
+    data[0] = spineIndex & 0xFF;
+    data[1] = (spineIndex >> 8) & 0xFF;
     data[2] = currentPage & 0xFF;
     data[3] = (currentPage >> 8) & 0xFF;
     data[4] = pageCount & 0xFF;
@@ -771,8 +804,10 @@ void EpubReaderActivity::renderStatusBar(const int orientedMarginRight, const in
   int progressTextWidth = 0;
 
   // Calculate progress in book
-  const float sectionChapterProg = static_cast<float>(section->currentPage) / section->pageCount;
-  const float bookProgress = epub->calculateProgress(currentSpineIndex, sectionChapterProg) * 100;
+  const float sectionChapterProg =
+      (section->pageCount > 0) ? (static_cast<float>(section->currentPage) / section->pageCount) : 0.0f;
+  const float rawBookProgress = epub->calculateProgress(currentSpineIndex, sectionChapterProg) * 100;
+  const float bookProgress = static_cast<float>(clampPercent(static_cast<int>(rawBookProgress + 0.5f)));
 
   if (showProgressText || showProgressPercentage || showBookPercentage) {
     // Right aligned text for progress counter

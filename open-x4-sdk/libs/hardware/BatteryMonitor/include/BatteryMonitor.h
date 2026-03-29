@@ -19,6 +19,11 @@ public:
     static uint16_t percentageFromMillivolts(uint16_t millivolts);
 
 private:
+    uint16_t sampleMillivoltsAveraged() const;
+
     uint8_t _adcPin;
     float _dividerMultiplier;
+    mutable bool _hasCachedPercentage = false;
+    mutable uint16_t _cachedPercentage = 0;
+    mutable unsigned long _lastPercentageSampleMs = 0;
 };
