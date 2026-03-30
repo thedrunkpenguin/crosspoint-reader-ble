@@ -2,6 +2,10 @@
 
 #include <HalStorage.h>
 #include <HardwareSerial.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+#include <algorithm>
 
 #include "Serialization.h"
 
@@ -11,9 +15,45 @@ constexpr const char* kPetStatePath = "/.crosspoint/pet/state.bin";
 constexpr uint32_t kPetSaveMagic = 0x31544550;  // PET1
 constexpr uint8_t kPetSaveVersion = 1;
 
+SemaphoreHandle_t getPetPersistenceMutex() {
+  static SemaphoreHandle_t s_mutex = xSemaphoreCreateMutex();
+  return s_mutex;
+}
+
+class ScopedPetPersistenceLock {
+ public:
+  ScopedPetPersistenceLock() : mutex_(getPetPersistenceMutex()) {
+    if (mutex_ != nullptr) {
+      locked_ = (xSemaphoreTake(mutex_, portMAX_DELAY) == pdTRUE);
+    }
+  }
+
+  ~ScopedPetPersistenceLock() {
+    if (locked_ && mutex_ != nullptr) {
+      xSemaphoreGive(mutex_);
+    }
+  }
+
+  bool locked() const { return locked_; }
+
+ private:
+  SemaphoreHandle_t mutex_ = nullptr;
+  bool locked_ = false;
+};
+
+template <typename T>
+bool readPodChecked(FsFile& file, T& value) {
+  return file.read(reinterpret_cast<uint8_t*>(&value), sizeof(T)) == sizeof(T);
+}
+
+template <typename T>
+bool writePodChecked(FsFile& file, const T& value) {
+  return file.write(reinterpret_cast<const uint8_t*>(&value), sizeof(T)) == sizeof(T);
+}
+
 bool isReasonablePetNameChar(char ch) {
-  return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == ' ' || ch == '-' ||
-         ch == '_' || ch == '\'';
+  // Keep names user-friendly but resilient: allow printable ASCII.
+  return ch >= 32 && ch <= 126;
 }
 
 void sanitizePetState(PetState& state) {
@@ -59,6 +99,12 @@ void sanitizePetState(PetState& state) {
 namespace pet {
 
 bool loadState(PetState& state) {
+  ScopedPetPersistenceLock lock;
+  if (!lock.locked()) {
+    Serial.printf("[PET] Failed to acquire persistence lock for load\n");
+    return false;
+  }
+
   FsFile f;
   if (!Storage.openFileForRead("PET", kPetStatePath, f)) {
     Serial.printf("[PET] No save file found at %s - starting fresh\n", kPetStatePath);
@@ -69,21 +115,31 @@ bool loadState(PetState& state) {
   state = PetState{};
 
   uint32_t header = 0;
-  serialization::readPod(f, header);
+  if (!readPodChecked(f, header)) {
+    f.close();
+    Serial.printf("[PET] Failed reading save header - starting fresh\n");
+    return false;
+  }
 
   if (header == kPetSaveMagic) {
     uint8_t version = 0;
-    serialization::readPod(f, version);
+    if (!readPodChecked(f, version)) {
+      f.close();
+      Serial.printf("[PET] Failed reading save version - starting fresh\n");
+      return false;
+    }
     if (version != kPetSaveVersion) {
       f.close();
       Serial.printf("[PET] Unsupported save version %u - starting fresh\n", static_cast<unsigned>(version));
       return false;
     }
 
-    serialization::readPod(f, state.initialized);
-    serialization::readPod(f, state.alive);
-    serialization::readPod(f, state.stage);
-    serialization::readPod(f, state.mood);
+    if (!readPodChecked(f, state.initialized) || !readPodChecked(f, state.alive) || !readPodChecked(f, state.stage) ||
+        !readPodChecked(f, state.mood)) {
+      f.close();
+      Serial.printf("[PET] Save file truncated in core state - starting fresh\n");
+      return false;
+    }
   } else {
     const uint8_t* legacy = reinterpret_cast<const uint8_t*>(&header);
     state.initialized = (legacy[0] != 0);
@@ -93,47 +149,116 @@ bool loadState(PetState& state) {
   }
 
   state.petType = 0;
-  serialization::readPod(f, state.petType);
-  serialization::readPod(f, state.petName);
+  if (!readPodChecked(f, state.petType) || !readPodChecked(f, state.petName)) {
+    f.close();
+    Serial.printf("[PET] Save file truncated in identity fields - starting fresh\n");
+    return false;
+  }
 
-  serialization::readPod(f, state.hunger);
-  serialization::readPod(f, state.happiness);
-  serialization::readPod(f, state.health);
-  serialization::readPod(f, state.energy);
-  serialization::readPod(f, state.discipline);
-  serialization::readPod(f, state.weight);
+  if (!readPodChecked(f, state.hunger) || !readPodChecked(f, state.happiness) || !readPodChecked(f, state.health) ||
+      !readPodChecked(f, state.energy) || !readPodChecked(f, state.discipline) || !readPodChecked(f, state.weight)) {
+    f.close();
+    Serial.printf("[PET] Save file truncated in stats - starting fresh\n");
+    return false;
+  }
 
-  serialization::readPod(f, state.birthTime);
-  serialization::readPod(f, state.lastTickTime);
-  serialization::readPod(f, state.lastDecayMs);
-  serialization::readPod(f, state.readPages);
-  serialization::readPod(f, state.totalPagesRead);
-  serialization::readPod(f, state.mealsFromReading);
-  serialization::readPod(f, state.booksFinished);
-  serialization::readPod(f, state.chaptersFinished);
+  if (!readPodChecked(f, state.birthTime) || !readPodChecked(f, state.lastTickTime) ||
+      !readPodChecked(f, state.lastDecayMs) || !readPodChecked(f, state.readPages) ||
+      !readPodChecked(f, state.totalPagesRead) || !readPodChecked(f, state.mealsFromReading) ||
+      !readPodChecked(f, state.booksFinished) || !readPodChecked(f, state.chaptersFinished)) {
+    f.close();
+    Serial.printf("[PET] Save file truncated in progress fields - starting fresh\n");
+    return false;
+  }
 
-  if (f.available() > 0) serialization::readPod(f, state.currentStreak);
-  if (f.available() > 0) serialization::readPod(f, state.daysAtStage);
-  if (f.available() > 0) serialization::readPod(f, state.lastReadDay);
-  if (f.available() > 0) serialization::readPod(f, state.pageAccumulator);
-  if (f.available() > 0) serialization::readPod(f, state.missionDay);
-  if (f.available() > 0) serialization::readPod(f, state.missionPagesRead);
-  if (f.available() > 0) serialization::readPod(f, state.missionPetCount);
-  if (f.available() > 0) serialization::readPod(f, state.isSick);
-  if (f.available() > 0) serialization::readPod(f, state.sicknessTimer);
-  if (f.available() > 0) serialization::readPod(f, state.wasteCount);
-  if (f.available() > 0) serialization::readPod(f, state.mealsSinceClean);
-  if (f.available() > 0) serialization::readPod(f, state.attentionCall);
-  if (f.available() > 0) serialization::readPod(f, state.isFakeCall);
-  if (f.available() > 0) serialization::readPod(f, state.currentNeed);
-  if (f.available() > 0) serialization::readPod(f, state.lastCallTime);
-  if (f.available() > 0) serialization::readPod(f, state.isSleeping);
-  if (f.available() > 0) serialization::readPod(f, state.lightsOff);
-  if (f.available() > 0) serialization::readPod(f, state.totalAge);
-  if (f.available() > 0) serialization::readPod(f, state.careMistakes);
-  if (f.available() > 0) serialization::readPod(f, state.avgCareScore);
-  if (f.available() > 0) serialization::readPod(f, state.evolutionVariant);
-  if (f.available() > 0) serialization::readPod(f, state.streakTier);
+  if (f.available() > 0 && !readPodChecked(f, state.currentStreak)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.daysAtStage)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.lastReadDay)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.pageAccumulator)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.missionDay)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.missionPagesRead)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.missionPetCount)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.isSick)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.sicknessTimer)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.wasteCount)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.mealsSinceClean)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.attentionCall)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.isFakeCall)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.currentNeed)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.lastCallTime)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.isSleeping)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.lightsOff)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.totalAge)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.careMistakes)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.avgCareScore)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.evolutionVariant)) {
+    f.close();
+    return false;
+  }
+  if (f.available() > 0 && !readPodChecked(f, state.streakTier)) {
+    f.close();
+    return false;
+  }
 
   f.close();
   if (!state.initialized && state.alive) {
@@ -153,6 +278,12 @@ bool loadState(PetState& state) {
 }
 
 bool saveState(const PetState& state) {
+  ScopedPetPersistenceLock lock;
+  if (!lock.locked()) {
+    Serial.printf("[PET] Failed to acquire persistence lock for save\n");
+    return false;
+  }
+
   Storage.mkdir(kPetDir);
 
   FsFile f;
@@ -164,54 +295,61 @@ bool saveState(const PetState& state) {
                 static_cast<int>(state.alive), static_cast<int>(state.stage),
                 static_cast<int>(state.hunger));
 
-  serialization::writePod(f, kPetSaveMagic);
-  serialization::writePod(f, kPetSaveVersion);
+  bool ok = true;
+  ok = ok && writePodChecked(f, kPetSaveMagic);
+  ok = ok && writePodChecked(f, kPetSaveVersion);
 
-  serialization::writePod(f, state.initialized);
-  serialization::writePod(f, state.alive);
-  serialization::writePod(f, state.stage);
-  serialization::writePod(f, state.mood);
-  serialization::writePod(f, state.petType);
-  serialization::writePod(f, state.petName);
+  ok = ok && writePodChecked(f, state.initialized);
+  ok = ok && writePodChecked(f, state.alive);
+  ok = ok && writePodChecked(f, state.stage);
+  ok = ok && writePodChecked(f, state.mood);
+  ok = ok && writePodChecked(f, state.petType);
+  ok = ok && writePodChecked(f, state.petName);
 
-  serialization::writePod(f, state.hunger);
-  serialization::writePod(f, state.happiness);
-  serialization::writePod(f, state.health);
-  serialization::writePod(f, state.energy);
-  serialization::writePod(f, state.discipline);
-  serialization::writePod(f, state.weight);
+  ok = ok && writePodChecked(f, state.hunger);
+  ok = ok && writePodChecked(f, state.happiness);
+  ok = ok && writePodChecked(f, state.health);
+  ok = ok && writePodChecked(f, state.energy);
+  ok = ok && writePodChecked(f, state.discipline);
+  ok = ok && writePodChecked(f, state.weight);
 
-  serialization::writePod(f, state.birthTime);
-  serialization::writePod(f, state.lastTickTime);
-  serialization::writePod(f, state.lastDecayMs);
-  serialization::writePod(f, state.readPages);
-  serialization::writePod(f, state.totalPagesRead);
-  serialization::writePod(f, state.mealsFromReading);
-  serialization::writePod(f, state.booksFinished);
-  serialization::writePod(f, state.chaptersFinished);
+  ok = ok && writePodChecked(f, state.birthTime);
+  ok = ok && writePodChecked(f, state.lastTickTime);
+  ok = ok && writePodChecked(f, state.lastDecayMs);
+  ok = ok && writePodChecked(f, state.readPages);
+  ok = ok && writePodChecked(f, state.totalPagesRead);
+  ok = ok && writePodChecked(f, state.mealsFromReading);
+  ok = ok && writePodChecked(f, state.booksFinished);
+  ok = ok && writePodChecked(f, state.chaptersFinished);
 
-  serialization::writePod(f, state.currentStreak);
-  serialization::writePod(f, state.daysAtStage);
-  serialization::writePod(f, state.lastReadDay);
-  serialization::writePod(f, state.pageAccumulator);
-  serialization::writePod(f, state.missionDay);
-  serialization::writePod(f, state.missionPagesRead);
-  serialization::writePod(f, state.missionPetCount);
-  serialization::writePod(f, state.isSick);
-  serialization::writePod(f, state.sicknessTimer);
-  serialization::writePod(f, state.wasteCount);
-  serialization::writePod(f, state.mealsSinceClean);
-  serialization::writePod(f, state.attentionCall);
-  serialization::writePod(f, state.isFakeCall);
-  serialization::writePod(f, state.currentNeed);
-  serialization::writePod(f, state.lastCallTime);
-  serialization::writePod(f, state.isSleeping);
-  serialization::writePod(f, state.lightsOff);
-  serialization::writePod(f, state.totalAge);
-  serialization::writePod(f, state.careMistakes);
-  serialization::writePod(f, state.avgCareScore);
-  serialization::writePod(f, state.evolutionVariant);
-  serialization::writePod(f, state.streakTier);
+  ok = ok && writePodChecked(f, state.currentStreak);
+  ok = ok && writePodChecked(f, state.daysAtStage);
+  ok = ok && writePodChecked(f, state.lastReadDay);
+  ok = ok && writePodChecked(f, state.pageAccumulator);
+  ok = ok && writePodChecked(f, state.missionDay);
+  ok = ok && writePodChecked(f, state.missionPagesRead);
+  ok = ok && writePodChecked(f, state.missionPetCount);
+  ok = ok && writePodChecked(f, state.isSick);
+  ok = ok && writePodChecked(f, state.sicknessTimer);
+  ok = ok && writePodChecked(f, state.wasteCount);
+  ok = ok && writePodChecked(f, state.mealsSinceClean);
+  ok = ok && writePodChecked(f, state.attentionCall);
+  ok = ok && writePodChecked(f, state.isFakeCall);
+  ok = ok && writePodChecked(f, state.currentNeed);
+  ok = ok && writePodChecked(f, state.lastCallTime);
+  ok = ok && writePodChecked(f, state.isSleeping);
+  ok = ok && writePodChecked(f, state.lightsOff);
+  ok = ok && writePodChecked(f, state.totalAge);
+  ok = ok && writePodChecked(f, state.careMistakes);
+  ok = ok && writePodChecked(f, state.avgCareScore);
+  ok = ok && writePodChecked(f, state.evolutionVariant);
+  ok = ok && writePodChecked(f, state.streakTier);
+
+  if (!ok) {
+    f.close();
+    Serial.printf("[PET] ERROR: Failed while writing pet save\n");
+    return false;
+  }
 
   f.close();
   Serial.printf("[PET] Pet state saved successfully\n");
@@ -219,6 +357,12 @@ bool saveState(const PetState& state) {
 }
 
 bool clearState() {
+  ScopedPetPersistenceLock lock;
+  if (!lock.locked()) {
+    Serial.printf("[PET] Failed to acquire persistence lock for clear\n");
+    return false;
+  }
+
   if (Storage.exists(kPetStatePath)) {
     const bool removed = Storage.remove(kPetStatePath);
     Serial.printf("[PET] Clear pet state file: %s\n", removed ? "removed" : "failed");
