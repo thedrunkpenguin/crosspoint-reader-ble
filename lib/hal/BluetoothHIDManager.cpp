@@ -15,6 +15,19 @@ static const char* HID_PROTOCOL_MODE_UUID = "2A4E";
 static constexpr uint8_t GAMEBRICK_ACTION_A_CODE = 0xF1;
 static constexpr uint8_t GAMEBRICK_ACTION_B_CODE = 0xF2;
 
+namespace {
+// BLE intervals are in 1.25ms units and timeout is in 10ms units.
+// Keep latency at 0 for low input lag while allowing a longer supervision timeout
+// to reduce disconnects at marginal range.
+constexpr uint16_t BLE_CONN_MIN_INTERVAL = 12;   // 15ms
+constexpr uint16_t BLE_CONN_MAX_INTERVAL = 24;   // 30ms
+constexpr uint16_t BLE_CONN_LATENCY = 0;
+constexpr uint16_t BLE_CONN_TIMEOUT = 600;       // 6s
+constexpr uint16_t BLE_CONN_SCAN_INTERVAL = 60;
+constexpr uint16_t BLE_CONN_SCAN_WINDOW = 30;
+constexpr uint32_t BLE_CONNECT_TIMEOUT_MS = 10000;
+}
+
 struct ReportMapHints {
   bool hasConsumerPage = false;
   bool hasKeyboardPage = false;
@@ -174,6 +187,7 @@ bool BluetoothHIDManager::enable() {
     // Initialize NimBLE stack
     NimBLEDevice::init("CrossPoint");
     NimBLEDevice::setPower(ESP_PWR_LVL_P9); // +9dBm
+    NimBLEDevice::setDefaultPhy(BLE_GAP_LE_PHY_1M_MASK, BLE_GAP_LE_PHY_1M_MASK);
     NimBLEDevice::setSecurityAuth(true, false, true);
     
     _enabled = true;
@@ -360,6 +374,9 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
 
     // Keep client lifetime under manager control so disconnect callbacks do not free it in NimBLE context.
     pClient->setSelfDelete(false, false);
+    pClient->setConnectTimeout(BLE_CONNECT_TIMEOUT_MS);
+    pClient->setConnectionParams(BLE_CONN_MIN_INTERVAL, BLE_CONN_MAX_INTERVAL, BLE_CONN_LATENCY, BLE_CONN_TIMEOUT,
+                                 BLE_CONN_SCAN_INTERVAL, BLE_CONN_SCAN_WINDOW);
 
     if (!pClient->isConnected()) {
       pClient->deleteServices();
@@ -377,6 +394,9 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
         if (freshClient) {
           pClient = freshClient;
           pClient->setSelfDelete(false, false);
+          pClient->setConnectTimeout(BLE_CONNECT_TIMEOUT_MS);
+          pClient->setConnectionParams(BLE_CONN_MIN_INTERVAL, BLE_CONN_MAX_INTERVAL, BLE_CONN_LATENCY,
+                                       BLE_CONN_TIMEOUT, BLE_CONN_SCAN_INTERVAL, BLE_CONN_SCAN_WINDOW);
           pClient->setClientCallbacks(&clientCallbacks);
         }
       }
@@ -387,6 +407,16 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
         return false;
       }
     }
+
+    const bool connParamsUpdated =
+        pClient->updateConnParams(BLE_CONN_MIN_INTERVAL, BLE_CONN_MAX_INTERVAL, BLE_CONN_LATENCY, BLE_CONN_TIMEOUT);
+    LOG_INF("BT", "Connection params update request: %d", connParamsUpdated);
+
+    const bool dataLenUpdated = pClient->setDataLen(251);
+    LOG_INF("BT", "Data length extension request (251): %d", dataLenUpdated);
+
+    const int connectedRssi = pClient->getRssi();
+    LOG_INF("BT", "Connected RSSI for %s: %d dBm", address.c_str(), connectedRssi);
     
     // Get HID service
     NimBLERemoteService* pService = pClient->getService(HID_SERVICE_UUID);

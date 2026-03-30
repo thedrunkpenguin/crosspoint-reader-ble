@@ -769,14 +769,15 @@ void BluetoothSettingsActivity::renderDeviceList() {
 }
 
 std::string BluetoothSettingsActivity::getSignalStrengthIndicator(const int32_t rssi) const {
-  // Convert RSSI to signal bars representation (matching WiFi scanner style)
-  if (rssi >= -50) {
+  // BLE RSSI tends to be lower than WiFi at similar distance.
+  // Use BLE-friendly thresholds so nearby remotes are not shown as always weak.
+  if (rssi >= -60) {
     return "||||";  // Excellent
   }
-  if (rssi >= -60) {
+  if (rssi >= -70) {
     return " |||";  // Good
   }
-  if (rssi >= -70) {
+  if (rssi >= -80) {
     return "  ||";  // Fair
   }
   return "   |";  // Very weak
