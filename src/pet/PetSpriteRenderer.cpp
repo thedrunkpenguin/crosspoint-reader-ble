@@ -55,6 +55,9 @@ const char* PetSpriteRenderer::moodName(PetMood mood) {
 }
 
 size_t PetSpriteRenderer::loadSprite(const char* path, size_t expectedBytes) {
+  if (!Storage.exists(path)) {
+    return 0;
+  }
   return Storage.readFileToBuffer(path, reinterpret_cast<char*>(spriteBuffer), SPRITE_BYTES + 1, expectedBytes);
 }
 

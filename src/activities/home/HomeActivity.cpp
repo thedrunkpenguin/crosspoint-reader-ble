@@ -35,6 +35,27 @@
 #include "pet/PetSpriteRenderer.h"
 #include "util/StringUtils.h"
 
+namespace {
+bool isDisplayablePetName(const char* value) {
+  if (value == nullptr || value[0] == '\0') {
+    return false;
+  }
+
+  if (value[0] == '/' || value[0] == '.' || value[0] == '\\') {
+    return false;
+  }
+
+  for (size_t i = 0; value[i] != '\0'; ++i) {
+    const char ch = value[i];
+    if (ch == '/' || ch == '\\') {
+      return false;
+    }
+  }
+
+  return true;
+}
+}
+
 int HomeActivity::getMenuItemCount() const {
   int count = 0;
 
@@ -685,7 +706,7 @@ void HomeActivity::render(Activity::RenderLock&&) {
   PET_MANAGER.tick();
   const auto& petState = PET_MANAGER.state();
   const char* petHeaderLabel = tr(STR_VIRTUAL_PET);
-  if (petState.alive && petState.petName[0]) {
+  if (petState.alive && isDisplayablePetName(petState.petName)) {
     petHeaderLabel = petState.petName;
   }
   std::string petHeader = renderer.truncatedText(UI_12_FONT_ID, petHeaderLabel, cardWidth - 20, EpdFontFamily::BOLD);

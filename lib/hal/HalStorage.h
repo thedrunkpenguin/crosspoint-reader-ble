@@ -2,10 +2,22 @@
 
 #include <SDCardManager.h>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
 #include <vector>
 
 class HalStorage {
  public:
+  class LockGuard {
+   public:
+    explicit LockGuard(const HalStorage& storage) : storage_(storage) { storage_.lock(); }
+    ~LockGuard() { storage_.unlock(); }
+
+   private:
+    const HalStorage& storage_;
+  };
+
   HalStorage();
   bool begin();
   bool ready() const;
@@ -29,6 +41,7 @@ class HalStorage {
   bool exists(const char* path);
   bool remove(const char* path);
   bool rmdir(const char* path);
+  bool rename(const char* path, const char* newPath);
 
   bool openFileForRead(const char* moduleName, const char* path, FsFile& file);
   bool openFileForRead(const char* moduleName, const std::string& path, FsFile& file);
@@ -38,12 +51,16 @@ class HalStorage {
   bool openFileForWrite(const char* moduleName, const String& path, FsFile& file);
   bool removeDir(const char* path);
 
+  void lock() const;
+  void unlock() const;
+
   static HalStorage& getInstance() { return instance; }
 
  private:
   static HalStorage instance;
 
   bool initialized = false;
+  mutable SemaphoreHandle_t ioMutex = nullptr;
 };
 
 #define Storage HalStorage::getInstance()

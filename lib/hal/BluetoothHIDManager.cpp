@@ -26,6 +26,8 @@ constexpr uint16_t BLE_CONN_TIMEOUT = 600;       // 6s
 constexpr uint16_t BLE_CONN_SCAN_INTERVAL = 60;
 constexpr uint16_t BLE_CONN_SCAN_WINDOW = 30;
 constexpr uint32_t BLE_CONNECT_TIMEOUT_MS = 10000;
+constexpr unsigned long FREE2_STALE_RELEASE_DEFAULT_MS = 250;
+constexpr unsigned long FREE2_STALE_RELEASE_READER_MS = 500;
 }
 
 struct ReportMapHints {
@@ -76,6 +78,28 @@ static ExtractedHIDKey extractGenericPageTurnKeycode(const uint8_t* report, size
   }
 
   return result;
+}
+
+static uint8_t classifyFree2Direction(const uint8_t keycode) {
+  if (keycode == DeviceProfiles::FREE2_FORWARD_A || keycode == DeviceProfiles::FREE2_FORWARD_B ||
+      keycode == DeviceProfiles::FREE2_FORWARD_C || keycode == DeviceProfiles::FREE2_FORWARD_D) {
+    return 0x01;
+  }
+
+  if (keycode == DeviceProfiles::FREE2_BACK_A || keycode == DeviceProfiles::FREE2_BACK_B ||
+      keycode == DeviceProfiles::FREE2_BACK_C || keycode == DeviceProfiles::FREE2_BACK_D) {
+    return 0x00;
+  }
+
+  return 0xFF;
+}
+
+static bool isFree2Profile(const DeviceProfiles::DeviceProfile* profile) {
+  if (profile == nullptr || profile->name == nullptr) {
+    return false;
+  }
+
+  return strcmp(profile->name, "Free2-M") == 0 || strcmp(profile->name, "Free2 Style") == 0;
 }
 
 static ReportMapHints parseReportMapHints(const std::string& map) {
@@ -544,6 +568,11 @@ bool BluetoothHIDManager::connectToDevice(const std::string& address) {
     
     if (!foundInScan) {
       LOG_INF("BT", "Device not in scan results (may be previously paired): %s", address.c_str());
+      if (connDev.name.empty() && !_bondedDeviceAddress.empty() && _bondedDeviceAddress == address &&
+          !_bondedDeviceName.empty()) {
+        connDev.name = _bondedDeviceName;
+        LOG_INF("BT", "Using bonded device name hint: %s", connDev.name.c_str());
+      }
     }
     
     // Profile matching priority:
@@ -711,6 +740,10 @@ void BluetoothHIDManager::setReaderContextCallback(std::function<bool()> callbac
   LOG_DBG("BT", "Reader context callback registered");
 }
 
+void BluetoothHIDManager::setButtonActivityNotifier(std::function<void(uint8_t)> notifier) {
+  _buttonActivityNotifier = notifier;
+}
+
 void BluetoothHIDManager::setBondedDevice(const std::string& address, const std::string& name) {
   _bondedDeviceAddress = address;
   _bondedDeviceName = name;
@@ -773,6 +806,11 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   
   // Update activity timestamp to keep connection alive
   device->lastActivityTime = millis();
+  // Notify HalGPIO of hold activity so getHeldTime() caps at real physical duration
+  if (g_instance->_buttonActivityNotifier && device->activeInjectedButton != 0xFF) {
+    g_instance->_buttonActivityNotifier(device->activeInjectedButton);
+  }
+
 
   if (g_instance->_debugCaptureEnabled) {
     char rawBuf[128] = {0};
@@ -1050,6 +1088,23 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
       }
     }
 
+    // Some remotes emit noisy 0x07/0x09 bytes in parallel with true rolling keycodes.
+    // If we selected 0x07/0x09, search the short report for a stronger non-GameBrick code.
+    if ((keycode == 0x07 || keycode == 0x09) && length > 0) {
+      const size_t scanLen = length < 8 ? length : 8;
+      for (size_t i = 0; i < scanLen; i++) {
+        const uint8_t candidate = pData[i];
+        if (candidate == 0x00 || candidate == 0xFF || candidate == 0x07 || candidate == 0x09) {
+          continue;
+        }
+        if (DeviceProfiles::isCommonPageTurnCode(candidate)) {
+          keycode = candidate;
+          keycodeIndex = static_cast<uint8_t>(i);
+          break;
+        }
+      }
+    }
+
     // Keep existing GameBrick bit0 press-state behavior when applicable.
     if (length >= 5 && (keycode == 0x07 || keycode == 0x09)) {
       isPressed = ((pData[0] & 0x01) != 0) || (keycode != 0x00);
@@ -1072,23 +1127,55 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
     // Track state for transition detection
     device->lastButtonState = isPressed;
     device->lastHIDKeycode = keycode;
+    device->lastNormalizedDirection = 0xFF;
     return;
   }
   
   // CRITICAL GATE: Don't inject any buttons until we've seen the first release
   // This prevents startup transient noise from being interpreted as button presses
   if (!device->hasSeenRelease) {
+    const bool likelyFree2Press =
+        keycode == DeviceProfiles::FREE2_FORWARD_A || keycode == DeviceProfiles::FREE2_FORWARD_B ||
+        keycode == DeviceProfiles::FREE2_FORWARD_C || keycode == DeviceProfiles::FREE2_FORWARD_D ||
+        keycode == DeviceProfiles::FREE2_BACK_A || keycode == DeviceProfiles::FREE2_BACK_B ||
+        keycode == DeviceProfiles::FREE2_BACK_C || keycode == DeviceProfiles::FREE2_BACK_D;
+
+    if (device->profile == nullptr && likelyFree2Press && isPressed) {
+      // Free 2 may not emit a clean initial release frame; arm on first valid press.
+      device->hasSeenRelease = true;
+      LOG_DBG("BT", "Arming auto-detect on first valid Free2 code: 0x%02X", keycode);
+    }
+
     releaseInjectedButton();
     device->lastButtonState = isPressed;
     device->lastHIDKeycode = keycode;
     return;
   }
 
+  const bool free2Profile = isFree2Profile(device->profile);
+  const uint8_t free2Direction = free2Profile ? classifyFree2Direction(keycode) : 0xFF;
+
   // Detect button PRESS transition.
   // For most remotes, key changes while held are treated as a new press event.
   // For Game Brick, ignore key-change retriggers while held to avoid duplicate events.
   bool isNewPressEvent =
       isPressed && (!device->lastButtonState || (!isGameBrickProfile && keycode != device->lastHIDKeycode));
+
+  // Free2 reports rolling keycodes while one button is held.
+  // Collapse that family to one logical press and ignore family flips until release.
+  if (free2Profile && isPressed) {
+    if (!device->lastButtonState) {
+      device->lastNormalizedDirection = free2Direction;
+    } else if (device->lastNormalizedDirection != 0xFF && free2Direction == device->lastNormalizedDirection) {
+      isNewPressEvent = false;
+    } else if (device->lastNormalizedDirection != 0xFF && free2Direction != 0xFF &&
+               free2Direction != device->lastNormalizedDirection) {
+      isNewPressEvent = false;
+      if (device->activeInjectedButton != 0xFF) {
+        keycode = device->lastHIDKeycode;
+      }
+    }
+  }
 
   if (isGameBrickProfile && isPressed && !isNewPressEvent && keycode == device->lastHIDKeycode &&
       device->lastNormalizedEventMs > 0) {
@@ -1123,7 +1210,23 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
     }
   }
 
-  const uint8_t mappedButton = isPressed ? g_instance->mapKeycodeToButton(keycode, device) : 0xFF;
+  uint8_t mappedButton = isPressed ? g_instance->mapKeycodeToButton(keycode, device) : 0xFF;
+
+  // Free2 can wobble briefly while a key is held, causing opposite-direction flips or
+  // transient unmapped frames. Keep the active direction latched during a continuous hold
+  // and wait for an actual release before changing direction.
+  if (free2Profile && isPressed && device->lastButtonState && device->activeInjectedButton != 0xFF) {
+    if (mappedButton == 0xFF) {
+      mappedButton = device->activeInjectedButton;
+    } else if (mappedButton != device->activeInjectedButton) {
+      if (g_instance->_debugCaptureEnabled) {
+        LOG_INF("BTDBG", "Hold wobble suppressed: active=%u incoming=%u key=0x%02X", device->activeInjectedButton,
+                mappedButton, keycode);
+      }
+      mappedButton = device->activeInjectedButton;
+      isNewPressEvent = false;
+    }
+  }
 
   if (isGameBrickProfile && g_instance->_debugCaptureEnabled && isPressed) {
     const char* keyLabel = "Unknown";
@@ -1234,6 +1337,11 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   device->lastNormalizedEventMs = nowMs;
   device->lastNormalizedKeycode = keycode;
   device->lastNormalizedPressed = isPressed;
+  if (!isPressed) {
+    device->lastNormalizedDirection = 0xFF;
+  } else if (free2Profile && free2Direction != 0xFF) {
+    device->lastNormalizedDirection = free2Direction;
+  }
 }
 
 uint16_t BluetoothHIDManager::parseHIDReport(uint8_t* data, size_t length) {
@@ -1272,6 +1380,25 @@ uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, ConnectedDevice
   
   // If we have a device profile, ONLY map keycodes specific to that profile
   if (profile) {
+    // Free 2 reports a rolling keycode family while button is held.
+    // These groups are captured from device logs and map to stable page actions.
+    if (strcmp(profile->name, "Free2-M") == 0 || strcmp(profile->name, "Free2 Style") == 0) {
+      const bool isForward =
+          keycode == 0x1C || keycode == 0xC4 || keycode == 0x6C || keycode == 0xBC;
+      const bool isBack =
+          keycode == 0xB4 || keycode == 0x0E || keycode == 0x66 || keycode == 0x16;
+
+      if (isForward) {
+        LOG_INF("BT", "Free2 rolling-code forward match: 0x%02X", keycode);
+        return HalGPIO::BTN_DOWN;
+      }
+
+      if (isBack) {
+        LOG_INF("BT", "Free2 rolling-code back match: 0x%02X", keycode);
+        return HalGPIO::BTN_UP;
+      }
+    }
+
     if (strncmp(profile->name, "IINE Game Brick", 15) == 0) {
       bool inReaderContext = false;
       if (_readerContextCallback) {
@@ -1425,17 +1552,37 @@ uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, ConnectedDevice
 }
 
 void BluetoothHIDManager::updateActivity() {
-  // Check inactivity timeouts every 10 seconds
   unsigned long now = millis();
+
+  // Fast path: release stale injected buttons promptly for Free2 only.
+  // Free2 often omits timely release frames; other remotes should keep their prior behavior.
+  for (auto& device : _connectedDevices) {
+    if (isFree2Profile(device.profile) && device.activeInjectedButton != 0xFF) {
+      const bool inReaderContext = _readerContextCallback && _readerContextCallback();
+      const unsigned long staleReleaseMs = inReaderContext ? FREE2_STALE_RELEASE_READER_MS
+                                                           : FREE2_STALE_RELEASE_DEFAULT_MS;
+      if (now - device.lastActivityTime <= staleReleaseMs) {
+        continue;
+      }
+      if (_buttonInjector) {
+        _buttonInjector(device.activeInjectedButton, false);
+      }
+      device.activeInjectedButton = 0xFF;
+      device.lastButtonState = false;
+      device.lastHIDKeycode = 0x00;
+      LOG_DBG("BT", "Released stale injected button for %s", device.address.c_str());
+    }
+  }
+
+  // Slow path: connection maintenance every 10 seconds.
   if (now - lastMaintenanceCheck < 10000) {
     return;
   }
   lastMaintenanceCheck = now;
 
-  // Release any stale injected virtual button if reports have gone silent.
-  // This prevents stuck navigation/page-turn when a remote powers off or drops.
+  // Preserve the original stale-release maintenance behavior for non-Free2 devices.
   for (auto& device : _connectedDevices) {
-    if (device.activeInjectedButton != 0xFF && now - device.lastActivityTime > 250) {
+    if (!isFree2Profile(device.profile) && device.activeInjectedButton != 0xFF && now - device.lastActivityTime > 250) {
       if (_buttonInjector) {
         _buttonInjector(device.activeInjectedButton, false);
       }

@@ -3,6 +3,10 @@
 namespace {
 constexpr uint8_t SD_CS = 12;
 constexpr uint32_t SPI_FQ = 40000000;
+constexpr uint8_t FILE_OPEN_ATTEMPTS = 8;
+constexpr unsigned long FILE_OPEN_RETRY_DELAY_MS = 30;
+constexpr uint8_t FILE_RENAME_ATTEMPTS = 6;
+constexpr unsigned long FILE_RENAME_RETRY_DELAY_MS = 20;
 }
 
 SDCardManager SDCardManager::instance;
@@ -225,12 +229,19 @@ bool SDCardManager::openFileForRead(const char* moduleName, const String& path, 
 }
 
 bool SDCardManager::openFileForWrite(const char* moduleName, const char* path, FsFile& file) {
-  file = sd.open(path, O_RDWR | O_CREAT | O_TRUNC);
-  if (!file) {
-    if (Serial) Serial.printf("[%lu] [%s] Failed to open file for writing: %s\n", millis(), moduleName, path);
-    return false;
+  for (uint8_t attempt = 0; attempt < FILE_OPEN_ATTEMPTS; ++attempt) {
+    file = sd.open(path, O_RDWR | O_CREAT | O_TRUNC);
+    if (file) {
+      return true;
+    }
+
+    if (attempt + 1 < FILE_OPEN_ATTEMPTS) {
+      delay(FILE_OPEN_RETRY_DELAY_MS);
+    }
   }
-  return true;
+
+  if (Serial) Serial.printf("[%lu] [%s] Failed to open file for writing: %s\n", millis(), moduleName, path);
+  return false;
 }
 
 bool SDCardManager::openFileForWrite(const char* moduleName, const std::string& path, FsFile& file) {
@@ -239,6 +250,23 @@ bool SDCardManager::openFileForWrite(const char* moduleName, const std::string& 
 
 bool SDCardManager::openFileForWrite(const char* moduleName, const String& path, FsFile& file) {
   return openFileForWrite(moduleName, path.c_str(), file);
+}
+
+bool SDCardManager::rename(const char* path, const char* newPath) {
+  for (uint8_t attempt = 0; attempt < FILE_RENAME_ATTEMPTS; ++attempt) {
+    if (sd.rename(path, newPath)) {
+      return true;
+    }
+
+    if (attempt + 1 < FILE_RENAME_ATTEMPTS) {
+      delay(FILE_RENAME_RETRY_DELAY_MS);
+    }
+  }
+
+  if (Serial) {
+    Serial.printf("[%lu] [SD] Failed to rename: %s -> %s\n", millis(), path, newPath);
+  }
+  return false;
 }
 
 bool SDCardManager::removeDir(const char* path) {

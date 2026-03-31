@@ -11,6 +11,27 @@
 #include "pet/PetManager.h"
 #include "pet/PetState.h"
 
+namespace {
+bool isDisplayablePetName(const char* value) {
+  if (value == nullptr || value[0] == '\0') {
+    return false;
+  }
+
+  if (value[0] == '/' || value[0] == '.' || value[0] == '\\') {
+    return false;
+  }
+
+  for (size_t i = 0; value[i] != '\0'; ++i) {
+    const char ch = value[i];
+    if (ch == '/' || ch == '\\') {
+      return false;
+    }
+  }
+
+  return true;
+}
+}
+
 const char* VirtualPetActivity::petTypeName(int type) const {
   switch (type % 5) {
     case 0:
@@ -64,7 +85,7 @@ void VirtualPetActivity::keepSelectionVisible() {
 }
 
 void VirtualPetActivity::openRenameKeyboard() {
-  std::string currentName = PET_MANAGER.state().petName;
+  std::string currentName = isDisplayablePetName(PET_MANAGER.state().petName) ? PET_MANAGER.state().petName : "";
   if (currentName.empty()) {
     currentName = petTypeName(PET_MANAGER.state().petType);
   }
@@ -357,7 +378,7 @@ void VirtualPetActivity::render(Activity::RenderLock&&) {
                    state.petType,
                    0);
 
-    const char* activeName = state.petName[0] ? state.petName : petTypeName(state.petType);
+    const char* activeName = isDisplayablePetName(state.petName) ? state.petName : petTypeName(state.petType);
         const int infoTop = spriteY + petSize + 10;
         renderer.drawCenteredText(UI_12_FONT_ID, infoTop, activeName, true, EpdFontFamily::BOLD);
         renderer.drawCenteredText(UI_10_FONT_ID, infoTop + 20, stageText(), true, EpdFontFamily::BOLD);

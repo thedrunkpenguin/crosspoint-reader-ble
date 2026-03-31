@@ -256,6 +256,16 @@ bool isCommonPageTurnCode(uint8_t code) {
     case KEYBOARD_VOLUME_UP:
     case KEYBOARD_VOLUME_DOWN:
 
+    // Free 2 rolling key families
+    case FREE2_FORWARD_A:
+    case FREE2_FORWARD_B:
+    case FREE2_FORWARD_C:
+    case FREE2_FORWARD_D:
+    case FREE2_BACK_A:
+    case FREE2_BACK_B:
+    case FREE2_BACK_C:
+    case FREE2_BACK_D:
+
     // Existing GameBrick fallback codes
     case 0x07:
     case 0x09:
@@ -275,6 +285,10 @@ bool mapCommonCodeToDirection(uint8_t code, bool& pageForward) {
     case KEYBOARD_SPACE:
     case KEYBOARD_ENTER:
     case KEYBOARD_VOLUME_UP:
+    case FREE2_FORWARD_A:
+    case FREE2_FORWARD_B:
+    case FREE2_FORWARD_C:
+    case FREE2_FORWARD_D:
     case 0x07:
       pageForward = true;
       return true;
@@ -285,6 +299,10 @@ bool mapCommonCodeToDirection(uint8_t code, bool& pageForward) {
     case KEYBOARD_UP_ARROW:
     case KEYBOARD_LEFT_ARROW:
     case KEYBOARD_VOLUME_DOWN:
+    case FREE2_BACK_A:
+    case FREE2_BACK_B:
+    case FREE2_BACK_C:
+    case FREE2_BACK_D:
     case 0x09:
       pageForward = false;
       return true;

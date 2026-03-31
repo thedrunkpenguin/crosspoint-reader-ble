@@ -386,6 +386,9 @@ void setup() {
     btMgr.setButtonInjector([](uint8_t buttonIndex, bool pressed) {
       gpio.setVirtualButtonState(buttonIndex, pressed);
     });
+        btMgr.setButtonActivityNotifier([](uint8_t buttonIndex) {
+          gpio.updateVirtualButtonActivity(buttonIndex);
+        });
     btMgr.setReaderContextCallback([]() {
       return currentActivity && currentActivity->isReaderPageContext();
     });

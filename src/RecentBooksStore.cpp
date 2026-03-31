@@ -52,6 +52,8 @@ void RecentBooksStore::updateBook(const std::string& path, const std::string& ti
 }
 
 bool RecentBooksStore::saveToFile() const {
+  HalStorage::LockGuard storageLock(Storage);
+
   // Make sure the directory exists
   Storage.mkdir("/.crosspoint");
 
@@ -107,6 +109,8 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
 }
 
 bool RecentBooksStore::loadFromFile() {
+  HalStorage::LockGuard storageLock(Storage);
+
   FsFile inputFile;
   if (!Storage.openFileForRead("RBS", RECENT_BOOKS_FILE, inputFile)) {
     return false;

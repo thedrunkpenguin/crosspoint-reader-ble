@@ -12,6 +12,9 @@ constexpr char STATE_FILE[] = "/.crosspoint/state.bin";
 CrossPointState CrossPointState::instance;
 
 bool CrossPointState::saveToFile() const {
+  HalStorage::LockGuard storageLock(Storage);
+  Storage.mkdir("/.crosspoint");
+
   FsFile outputFile;
   if (!Storage.openFileForWrite("CPS", STATE_FILE, outputFile)) {
     return false;
@@ -27,6 +30,8 @@ bool CrossPointState::saveToFile() const {
 }
 
 bool CrossPointState::loadFromFile() {
+  HalStorage::LockGuard storageLock(Storage);
+
   FsFile inputFile;
   if (!Storage.openFileForRead("CPS", STATE_FILE, inputFile)) {
     return false;

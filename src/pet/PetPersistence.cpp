@@ -12,6 +12,7 @@
 namespace {
 constexpr const char* kPetDir = "/.crosspoint/pet";
 constexpr const char* kPetStatePath = "/.crosspoint/pet/state.bin";
+constexpr const char* kPetStateTempPath = "/.crosspoint/pet/state.tmp";
 constexpr uint32_t kPetSaveMagic = 0x31544550;  // PET1
 constexpr uint8_t kPetSaveVersion = 1;
 
@@ -56,11 +57,31 @@ bool isReasonablePetNameChar(char ch) {
   return ch >= 32 && ch <= 126;
 }
 
+bool looksLikePathFragment(const char* value) {
+  if (value == nullptr || value[0] == '\0') {
+    return false;
+  }
+
+  if (value[0] == '/' || value[0] == '.' || value[0] == '\\') {
+    return true;
+  }
+
+  for (size_t i = 0; value[i] != '\0'; ++i) {
+    const char ch = value[i];
+    if (ch == '/' || ch == '\\') {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void sanitizePetState(PetState& state) {
   state.petName[sizeof(state.petName) - 1] = '\0';
 
   bool validName = true;
   bool anyVisible = false;
+  bool hasAlphaNumeric = false;
   for (size_t i = 0; i < sizeof(state.petName) && state.petName[i] != '\0'; ++i) {
     const char ch = state.petName[i];
     if (!isReasonablePetNameChar(ch)) {
@@ -70,8 +91,11 @@ void sanitizePetState(PetState& state) {
     if (ch != ' ') {
       anyVisible = true;
     }
+    if ((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
+      hasAlphaNumeric = true;
+    }
   }
-  if (!validName || !anyVisible) {
+  if (!validName || !anyVisible || !hasAlphaNumeric || looksLikePathFragment(state.petName)) {
     state.petName[0] = '\0';
   }
 
@@ -104,6 +128,7 @@ bool loadState(PetState& state) {
     Serial.printf("[PET] Failed to acquire persistence lock for load\n");
     return false;
   }
+  HalStorage::LockGuard storageLock(Storage);
 
   FsFile f;
   if (!Storage.openFileForRead("PET", kPetStatePath, f)) {
@@ -283,11 +308,12 @@ bool saveState(const PetState& state) {
     Serial.printf("[PET] Failed to acquire persistence lock for save\n");
     return false;
   }
+  HalStorage::LockGuard storageLock(Storage);
 
   Storage.mkdir(kPetDir);
 
   FsFile f;
-  if (!Storage.openFileForWrite("PET", kPetStatePath, f)) {
+  if (!Storage.openFileForWrite("PET", kPetStateTempPath, f)) {
     Serial.printf("[%lu] [PET] ERROR: Failed to open save file for writing\n", millis());
     return false;
   }
@@ -347,11 +373,22 @@ bool saveState(const PetState& state) {
 
   if (!ok) {
     f.close();
+    Storage.remove(kPetStateTempPath);
     Serial.printf("[PET] ERROR: Failed while writing pet save\n");
     return false;
   }
 
   f.close();
+
+  if (Storage.exists(kPetStatePath)) {
+    Storage.remove(kPetStatePath);
+  }
+  if (!Storage.rename(kPetStateTempPath, kPetStatePath)) {
+    Storage.remove(kPetStateTempPath);
+    Serial.printf("[PET] ERROR: Failed to finalize save file\n");
+    return false;
+  }
+
   Serial.printf("[PET] Pet state saved successfully\n");
   return true;
 }
@@ -362,6 +399,7 @@ bool clearState() {
     Serial.printf("[PET] Failed to acquire persistence lock for clear\n");
     return false;
   }
+  HalStorage::LockGuard storageLock(Storage);
 
   if (Storage.exists(kPetStatePath)) {
     const bool removed = Storage.remove(kPetStatePath);

@@ -146,6 +146,8 @@ uint8_t CrossPointSettings::writeSettings(FsFile& file, bool count_only) const {
 }
 
 bool CrossPointSettings::saveToFile() const {
+  HalStorage::LockGuard storageLock(Storage);
+
   // Make sure the directory exists
   Storage.mkdir("/.crosspoint");
 
@@ -182,6 +184,8 @@ bool CrossPointSettings::saveToFile() const {
 }
 
 bool CrossPointSettings::loadFromFile() {
+  HalStorage::LockGuard storageLock(Storage);
+
   auto loadOneFile = [&](const char* path) {
     FsFile inputFile;
     if (!Storage.openFileForRead("CPS", path, inputFile)) {

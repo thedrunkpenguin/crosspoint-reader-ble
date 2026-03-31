@@ -28,6 +28,16 @@ constexpr uint8_t KEYBOARD_ENTER = 0x28;
 constexpr uint8_t KEYBOARD_VOLUME_UP = 0x80;
 constexpr uint8_t KEYBOARD_VOLUME_DOWN = 0x81;
 
+// Free 2 observed rolling keycode families (while held)
+constexpr uint8_t FREE2_FORWARD_A = 0x1C;
+constexpr uint8_t FREE2_FORWARD_B = 0xC4;
+constexpr uint8_t FREE2_FORWARD_C = 0x6C;
+constexpr uint8_t FREE2_FORWARD_D = 0xBC;
+constexpr uint8_t FREE2_BACK_A = 0xB4;
+constexpr uint8_t FREE2_BACK_B = 0x0E;
+constexpr uint8_t FREE2_BACK_C = 0x66;
+constexpr uint8_t FREE2_BACK_D = 0x16;
+
 struct DeviceProfile {
   const char* name;           // Device name for display
   const char* macPrefix;      // MAC address prefix to identify device (or nullptr)

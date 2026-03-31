@@ -17,6 +17,7 @@ namespace {
 constexpr uint8_t PET_MAX_LEVEL = 25;
 constexpr uint32_t PET_LEVEL_BASE_PAGES = 20;
 constexpr uint32_t PET_LEVEL_STEP_GROWTH = 12;
+constexpr uint16_t PET_PAGE_TURN_SAVE_INTERVAL = 4;
 
 struct PetLevelProgress {
   uint8_t level;
@@ -303,16 +304,23 @@ void PetManager::onPageTurn() {
   }
 
   const uint16_t pagesPerMeal = getEffectivePagesPerMeal();
+  bool consumedMeal = false;
   if (state_.pageAccumulator >= pagesPerMeal) {
     state_.pageAccumulator = static_cast<uint16_t>(state_.pageAccumulator - pagesPerMeal);
     state_.mealsFromReading++;
+    consumedMeal = true;
     (void)feedMeal();
   }
 
   PetEvolution::checkEvolution(state_);
 
   recalcMood();
-  save();
+
+  const bool shouldPersistNow =
+      consumedMeal || pendingMilestone_ != Milestone::NONE || (state_.readPages % PET_PAGE_TURN_SAVE_INTERVAL) == 0;
+  if (shouldPersistNow) {
+    save();
+  }
 }
 
 void PetManager::onChapterComplete() {

@@ -27,6 +27,7 @@ class HalGPIO {
   uint8_t previousVirtualButtonState = 0; // Previous frame virtual state
   unsigned long virtualPressStart[7] = {0};
   unsigned long virtualPressFinish[7] = {0};
+  unsigned long virtualLastActivityTime[7] = {0};
 
  public:
   HalGPIO() = default;
@@ -48,6 +49,8 @@ class HalGPIO {
   void setVirtualButtonState(uint8_t buttonIndex, bool pressed);
   void injectButtonPress(uint8_t buttonIndex);
   void clearVirtualButtons();
+  void updateVirtualButtonActivity(uint8_t buttonIndex);
+
 
   // Check if USB is connected
   bool isUsbConnected() const;

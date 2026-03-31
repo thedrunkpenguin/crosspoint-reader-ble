@@ -16,6 +16,10 @@ namespace {
 enum class ImageFormat { UNKNOWN, JPEG, PNG, WEBP };
 
 ImageFormat detectImageFormatFromFile(const std::string& imagePath) {
+  if (!Storage.exists(imagePath.c_str())) {
+    return ImageFormat::UNKNOWN;
+  }
+
   FsFile file;
   if (!Storage.openFileForRead("DEC", imagePath, file)) {
     return ImageFormat::UNKNOWN;
