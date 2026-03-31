@@ -14,12 +14,12 @@ If your remote connects but buttons do not work, try custom key mapping. If it s
 
 ## Release Highlights
 
-### v1.1.1-ble.13 (latest)
+### v1.1.1-ble.14 (latest)
 
 - **Firmware downloads**:
-  - Single image: [crosspoint-reader-ble-v1.1.1-ble.13-firmware.bin](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.13/crosspoint-reader-ble-v1.1.1-ble.13-firmware.bin)
-  - Full flash bundle (bootloader + partitions + firmware + instructions): [crosspoint-reader-ble-v1.1.1-ble.13-full-flash.zip](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.13/crosspoint-reader-ble-v1.1.1-ble.13-full-flash.zip)
-  - Checksums: [SHA256SUMS.txt](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.13/SHA256SUMS.txt)
+  - Single image: [crosspoint-reader-ble-v1.1.1-ble.14-firmware.bin](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.14/crosspoint-reader-ble-v1.1.1-ble.14-firmware.bin)
+  - Full flash bundle (bootloader + partitions + firmware + instructions): [crosspoint-reader-ble-v1.1.1-ble.14-full-flash.zip](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.14/crosspoint-reader-ble-v1.1.1-ble.14-full-flash.zip)
+  - Checksums: [SHA256SUMS.txt](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.14/SHA256SUMS.txt)
 - **New Subreddit Reader mode** in Network: browse one subreddit on-device with post list, body text, comments, and image view.
 - Adds **Subreddit Reader settings**: configurable subreddit name and feed refresh interval (5/15/30/60 min).
 - **Image rendering controls** for subreddit content: five contrast levels with brightness offset support in JPEG/PNG conversion paths.

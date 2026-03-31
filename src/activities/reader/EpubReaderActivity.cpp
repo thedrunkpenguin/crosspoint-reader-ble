@@ -73,48 +73,78 @@ void EpubReaderActivity::onEnter() {
 
   epub->setupCacheDir();
 
-  FsFile f;
-  if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[7] = {0};
-    int dataSize = f.read(data, 7);
-    if (dataSize == 4 || dataSize == 6 || dataSize == 7) {
-      currentSpineIndex = data[0] + (data[1] << 8);
-      nextPageNumber = data[2] + (data[3] << 8);
-      cachedSpineIndex = currentSpineIndex;
-      LOG_DBG("ERS", "Loaded cache: %d, %d", currentSpineIndex, nextPageNumber);
+  const std::string cacheDir = epub->getCachePath();
+  const std::string progressPath = cacheDir + "/progress.bin";
+  const std::string progressBackupPath = cacheDir + "/progress.bak";
+
+  auto loadProgressFile = [&](const std::string& path, bool& validOut) -> bool {
+    validOut = false;
+    FsFile f;
+    if (!Storage.openFileForRead("ERS", path, f)) {
+      return false;
     }
+
+    uint8_t data[7] = {0};
+    const int dataSize = f.read(data, 7);
+    f.close();
+
+    if (dataSize != 4 && dataSize != 6 && dataSize != 7) {
+      return true;
+    }
+
+    const int loadedSpine = data[0] + (data[1] << 8);
+    const int loadedPage = data[2] + (data[3] << 8);
+    int loadedPageCount = 0;
     if (dataSize >= 6) {
-      cachedChapterTotalPageCount = data[4] + (data[5] << 8);
+      loadedPageCount = data[4] + (data[5] << 8);
+    }
+
+    if (loadedPage == UINT16_MAX) {
+      return true;
     }
 
     if (dataSize == 7) {
       const int persistedBookPercent = data[6];
       if (persistedBookPercent < 0 || persistedBookPercent > 100) {
-        LOG_DBG("ERS", "Ignoring corrupt cached percent: %d", persistedBookPercent);
-        currentSpineIndex = 0;
-        nextPageNumber = 0;
-        cachedSpineIndex = 0;
-        cachedChapterTotalPageCount = 0;
+        return true;
       }
     }
 
-    if (nextPageNumber == UINT16_MAX) {
-      // UINT16_MAX is used only as an in-memory sentinel while changing chapters.
-      // If it is read from disk, treat it as invalid persisted progress.
-      nextPageNumber = 0;
-    }
-
     const int spineItemsCount = epub->getSpineItemsCount();
-    if (spineItemsCount > 0 && (currentSpineIndex < 0 || currentSpineIndex >= spineItemsCount)) {
-      LOG_DBG("ERS", "Ignoring out-of-range cached spine index: %d", currentSpineIndex);
-      currentSpineIndex = 0;
-      nextPageNumber = 0;
-      cachedSpineIndex = 0;
-      cachedChapterTotalPageCount = 0;
+    if (spineItemsCount > 0 && (loadedSpine < 0 || loadedSpine >= spineItemsCount)) {
+      return true;
     }
 
-    f.close();
+    currentSpineIndex = loadedSpine;
+    nextPageNumber = loadedPage;
+    cachedSpineIndex = loadedSpine;
+    cachedChapterTotalPageCount = loadedPageCount;
+    validOut = true;
+    LOG_DBG("ERS", "Loaded cache: %d, %d", currentSpineIndex, nextPageNumber);
+    return true;
+  };
+
+  bool primaryValid = false;
+  const bool primaryPresent = loadProgressFile(progressPath, primaryValid);
+  bool backupValid = false;
+  bool backupPresent = false;
+
+  if (!primaryValid) {
+    backupPresent = loadProgressFile(progressBackupPath, backupValid);
+    if (backupValid) {
+      LOG_DBG("ERS", "Recovered progress from backup cache");
+    }
   }
+
+  if (primaryPresent && !primaryValid) {
+    // Prevent repeatedly loading the same corrupted cache.
+    Storage.remove(progressPath.c_str());
+  }
+
+  if (!primaryValid && backupPresent && !backupValid) {
+    Storage.remove(progressBackupPath.c_str());
+  }
+
   // We may want a better condition to detect if we are opening for the first time.
   // This will trigger if the book is re-opened at Chapter 0.
   if (currentSpineIndex == 0) {
@@ -142,8 +172,10 @@ void EpubReaderActivity::onExit() {
 
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
+  chapterSkipConsumedForHold = false;
   lastTrackedSpineIndex = -1;
   lastTrackedPageIndex = -1;
+  lastBookProgressPercent = 0;
   bookFinishedReported = false;
   section.reset();
   epub.reset();
@@ -199,12 +231,7 @@ void EpubReaderActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     const int currentPage = section ? section->currentPage + 1 : 0;
     const int totalPages = section ? section->pageCount : 0;
-    float bookProgress = 0.0f;
-    if (epub && epub->getBookSize() > 0 && section && section->pageCount > 0) {
-      const float chapterProgress = static_cast<float>(section->currentPage) / static_cast<float>(section->pageCount);
-      bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
-    }
-    const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
+    const int bookProgressPercent = clampPercent(lastBookProgressPercent);
     exitActivity();
     enterNewActivity(new EpubReaderMenuActivity(
         this->renderer, this->mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
@@ -225,47 +252,21 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  // When long-press chapter skip is disabled, turn pages on press instead of release.
-  const bool usePressForPageTurn = !SETTINGS.longPressChapterSkip;
-  const bool prevTriggered = usePressForPageTurn ? (mappedInput.wasPressed(MappedInputManager::Button::PageBack) ||
-                                                    mappedInput.wasPressed(MappedInputManager::Button::Left))
-                                                 : (mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
-                                                    mappedInput.wasReleased(MappedInputManager::Button::Left));
+  const bool prevTriggered = mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
+                             mappedInput.wasReleased(MappedInputManager::Button::Left);
   const bool powerPageTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
                              mappedInput.wasReleased(MappedInputManager::Button::Power);
-  const bool nextTriggered = usePressForPageTurn
-                                 ? (mappedInput.wasPressed(MappedInputManager::Button::PageForward) || powerPageTurn ||
-                                    mappedInput.wasPressed(MappedInputManager::Button::Right))
-                                 : (mappedInput.wasReleased(MappedInputManager::Button::PageForward) || powerPageTurn ||
-                                    mappedInput.wasReleased(MappedInputManager::Button::Right));
+  const bool nextTriggered = mappedInput.wasReleased(MappedInputManager::Button::PageForward) || powerPageTurn ||
+                             mappedInput.wasReleased(MappedInputManager::Button::Right);
 
   if (!prevTriggered && !nextTriggered) {
     return;
   }
 
-  const unsigned long prevHeldMs = std::max(mappedInput.getHeldTime(MappedInputManager::Button::PageBack),
-                                            mappedInput.getHeldTime(MappedInputManager::Button::Left));
-  const unsigned long nextHeldMs = std::max(mappedInput.getHeldTime(MappedInputManager::Button::PageForward),
-                                            mappedInput.getHeldTime(MappedInputManager::Button::Right));
-
   // any botton press when at end of the book goes back to the last page
   if (currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
     currentSpineIndex = epub->getSpineItemsCount() - 1;
     nextPageNumber = UINT16_MAX;
-    requestUpdate();
-    return;
-  }
-
-  const bool skipChapter = SETTINGS.longPressChapterSkip && ((prevTriggered ? prevHeldMs : nextHeldMs) > skipChapterMs);
-
-  if (skipChapter) {
-    // We don't want to delete the section mid-render, so grab the semaphore
-    {
-      RenderLock lock(*this);
-      nextPageNumber = 0;
-      currentSpineIndex = nextTriggered ? currentSpineIndex + 1 : currentSpineIndex - 1;
-      section.reset();
-    }
     requestUpdate();
     return;
   }
@@ -682,6 +683,7 @@ void EpubReaderActivity::render(Activity::RenderLock&& lock) {
       bookPercent = clampPercent(
           static_cast<int>(epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f + 0.5f));
     }
+    lastBookProgressPercent = bookPercent;
     saveProgress(currentSpineIndex, section->currentPage, section->pageCount, bookPercent);
 
     if (lastTrackedSpineIndex != currentSpineIndex || lastTrackedPageIndex != section->currentPage) {
@@ -696,8 +698,20 @@ void EpubReaderActivity::render(Activity::RenderLock&& lock) {
 }
 
 void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount, int bookProgressPercent) {
+  HalStorage::LockGuard storageLock(Storage);
   FsFile f;
-  if (Storage.openFileForWrite("ERS", epub->getCachePath() + "/progress.bin", f)) {
+  const std::string cacheDir = epub->getCachePath();
+  const std::string progressPath = cacheDir + "/progress.bin";
+  const std::string progressBackupPath = cacheDir + "/progress.bak";
+  const std::string progressTempPath = cacheDir + "/progress.tmp";
+  const std::string progressBackupTempPath = cacheDir + "/progress.bak.tmp";
+
+  // Cache directory should already exist, but recreate defensively to avoid intermittent save failures.
+  Storage.mkdir(cacheDir.c_str(), true);
+
+  const bool opened = Storage.openFileForWrite("ERS", progressTempPath, f);
+
+  if (opened) {
     const uint8_t pct = static_cast<uint8_t>(bookProgressPercent < 0 ? 0 : (bookProgressPercent > 100 ? 100 : bookProgressPercent));
     uint8_t data[7];
     data[0] = spineIndex & 0xFF;
@@ -707,11 +721,47 @@ void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
     data[4] = pageCount & 0xFF;
     data[5] = (pageCount >> 8) & 0xFF;
     data[6] = pct;
-    f.write(data, 7);
+    const bool writeOk = f.write(data, 7) == 7;
     f.close();
+
+    if (!writeOk) {
+      Storage.remove(progressTempPath.c_str());
+      LOG_ERR("ERS", "Could not write progress temp file! path=%s", progressTempPath.c_str());
+      return;
+    }
+
+    if (Storage.exists(progressPath.c_str())) {
+      Storage.remove(progressPath.c_str());
+    }
+
+    if (!Storage.rename(progressTempPath.c_str(), progressPath.c_str())) {
+      Storage.remove(progressTempPath.c_str());
+      LOG_ERR("ERS", "Could not finalize progress save! tmp=%s final=%s", progressTempPath.c_str(),
+              progressPath.c_str());
+      return;
+    }
+
+    FsFile backupFile;
+    if (Storage.openFileForWrite("ERS", progressBackupTempPath, backupFile)) {
+      const bool backupWriteOk = backupFile.write(data, 7) == 7;
+      backupFile.close();
+
+      if (backupWriteOk) {
+        if (Storage.exists(progressBackupPath.c_str())) {
+          Storage.remove(progressBackupPath.c_str());
+        }
+        if (!Storage.rename(progressBackupTempPath.c_str(), progressBackupPath.c_str())) {
+          Storage.remove(progressBackupTempPath.c_str());
+          LOG_DBG("ERS", "Backup progress finalize failed: %s", progressBackupPath.c_str());
+        }
+      } else {
+        Storage.remove(progressBackupTempPath.c_str());
+      }
+    }
+
     LOG_DBG("ERS", "Progress saved: Chapter %d, Page %d, Book %d%%", spineIndex, currentPage, pct);
   } else {
-    LOG_ERR("ERS", "Could not save progress!");
+    LOG_ERR("ERS", "Could not save progress! path=%s", progressPath.c_str());
   }
 }
 void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int orientedMarginTop,
