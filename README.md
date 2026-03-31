@@ -14,12 +14,16 @@ If your remote connects but buttons do not work, try custom key mapping. If it s
 
 ## Release Highlights
 
-### v1.1.1-ble.14 (latest)
+### v1.1.1-ble.15 (latest)
 
 - **Firmware downloads**:
-  - Single image: [crosspoint-reader-ble-v1.1.1-ble.14-firmware.bin](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.14/crosspoint-reader-ble-v1.1.1-ble.14-firmware.bin)
-  - Full flash bundle (bootloader + partitions + firmware + instructions): [crosspoint-reader-ble-v1.1.1-ble.14-full-flash.zip](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.14/crosspoint-reader-ble-v1.1.1-ble.14-full-flash.zip)
-  - Checksums: [SHA256SUMS.txt](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.14/SHA256SUMS.txt)
+  - Single image: [crosspoint-reader-ble-v1.1.1-ble.15-firmware.bin](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.15/crosspoint-reader-ble-v1.1.1-ble.15-firmware.bin)
+  - Full flash bundle (bootloader + partitions + firmware + instructions): [crosspoint-reader-ble-v1.1.1-ble.15-full-flash.zip](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.15/crosspoint-reader-ble-v1.1.1-ble.15-full-flash.zip)
+  - Checksums: [SHA256SUMS.txt](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.15/SHA256SUMS.txt)
+- **Restored long-press chapter skip** for all physical-button remotes (GameBrick, mini_keyboard, etc.) — reverts an accidental regression from ble.14 where chapter-skip was removed from all remotes.
+
+### v1.1.1-ble.14
+
 - **New Subreddit Reader mode** in Network: browse one subreddit on-device with post list, body text, comments, and image view.
 - **Free 2 Now working**: added support for the free 2 device.
 

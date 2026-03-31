@@ -252,21 +252,47 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  const bool prevTriggered = mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
-                             mappedInput.wasReleased(MappedInputManager::Button::Left);
+  // When long-press chapter skip is disabled, turn pages on press instead of release.
+  const bool usePressForPageTurn = !SETTINGS.longPressChapterSkip;
+  const bool prevTriggered = usePressForPageTurn ? (mappedInput.wasPressed(MappedInputManager::Button::PageBack) ||
+                                                    mappedInput.wasPressed(MappedInputManager::Button::Left))
+                                                 : (mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
+                                                    mappedInput.wasReleased(MappedInputManager::Button::Left));
   const bool powerPageTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
                              mappedInput.wasReleased(MappedInputManager::Button::Power);
-  const bool nextTriggered = mappedInput.wasReleased(MappedInputManager::Button::PageForward) || powerPageTurn ||
-                             mappedInput.wasReleased(MappedInputManager::Button::Right);
+  const bool nextTriggered = usePressForPageTurn
+                                 ? (mappedInput.wasPressed(MappedInputManager::Button::PageForward) || powerPageTurn ||
+                                    mappedInput.wasPressed(MappedInputManager::Button::Right))
+                                 : (mappedInput.wasReleased(MappedInputManager::Button::PageForward) || powerPageTurn ||
+                                    mappedInput.wasReleased(MappedInputManager::Button::Right));
 
   if (!prevTriggered && !nextTriggered) {
     return;
   }
 
+  const unsigned long prevHeldMs = std::max(mappedInput.getHeldTime(MappedInputManager::Button::PageBack),
+                                            mappedInput.getHeldTime(MappedInputManager::Button::Left));
+  const unsigned long nextHeldMs = std::max(mappedInput.getHeldTime(MappedInputManager::Button::PageForward),
+                                            mappedInput.getHeldTime(MappedInputManager::Button::Right));
+
   // any botton press when at end of the book goes back to the last page
   if (currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
     currentSpineIndex = epub->getSpineItemsCount() - 1;
     nextPageNumber = UINT16_MAX;
+    requestUpdate();
+    return;
+  }
+
+  const bool skipChapter = SETTINGS.longPressChapterSkip && ((prevTriggered ? prevHeldMs : nextHeldMs) > skipChapterMs);
+
+  if (skipChapter) {
+    // We don't want to delete the section mid-render, so grab the semaphore
+    {
+      RenderLock lock(*this);
+      nextPageNumber = 0;
+      currentSpineIndex = nextTriggered ? currentSpineIndex + 1 : currentSpineIndex - 1;
+      section.reset();
+    }
     requestUpdate();
     return;
   }
