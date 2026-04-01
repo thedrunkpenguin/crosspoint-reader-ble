@@ -50,6 +50,7 @@ MappedInputManager mappedInputManager(gpio);
 GfxRenderer renderer(display);
 FontDecompressor fontDecompressor;
 Activity* currentActivity;
+static volatile bool gBluetoothReaderPageContext = false;
 
 // Fonts
 EpdFont bookerly14RegularFont(&bookerly_14_regular);
@@ -145,6 +146,11 @@ unsigned long t1 = 0;
 unsigned long t2 = 0;
 
 void exitActivity() {
+  // Bluetooth callbacks may query whether we're in a reader page context from a
+  // different task. Clear the shared flag before tearing down the activity to
+  // avoid touching `currentActivity` while it is being deleted.
+  gBluetoothReaderPageContext = false;
+
   if (currentActivity) {
     currentActivity->onExit();
     delete currentActivity;
@@ -154,7 +160,9 @@ void exitActivity() {
 
 void enterNewActivity(Activity* activity) {
   currentActivity = activity;
+  gBluetoothReaderPageContext = currentActivity && currentActivity->isReaderPageContext();
   currentActivity->onEnter();
+  gBluetoothReaderPageContext = currentActivity && currentActivity->isReaderPageContext();
 }
 
 // Verify power button press duration on wake-up from deep sleep
@@ -390,7 +398,7 @@ void setup() {
           gpio.updateVirtualButtonActivity(buttonIndex);
         });
     btMgr.setReaderContextCallback([]() {
-      return currentActivity && currentActivity->isReaderPageContext();
+      return gBluetoothReaderPageContext;
     });
     btMgr.setBondedDevice(SETTINGS.bleBondedDeviceAddr, SETTINGS.bleBondedDeviceName);
     LOG_INF("MAIN", "Bluetooth HID initialized with button injection");
@@ -454,6 +462,10 @@ void loop() {
   const bool userInputDetected = gpio.wasAnyPressed() || gpio.wasAnyReleased();
   bool bleRecentActivity = false;
   bool bleEnabled = false;
+
+  // Update this only on the main thread; Bluetooth callbacks read the cached
+  // flag instead of dereferencing `currentActivity` during activity transitions.
+  gBluetoothReaderPageContext = currentActivity && currentActivity->isReaderPageContext();
 
   // Check for Bluetooth inactivity timeouts and auto-reconnect
   try {

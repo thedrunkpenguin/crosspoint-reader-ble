@@ -7,6 +7,7 @@
 
 #include "Xtc.h"
 
+#include <Arduino.h>
 #include <HalStorage.h>
 #include <Logging.h>
 
@@ -21,6 +22,26 @@ inline void markMonoBitmapBlack(std::vector<uint8_t>& bitmap, const size_t rowSi
   bitmap[byteIndex] &= static_cast<uint8_t>(~(1u << (7 - (x % 8))));
 }
 
+inline uint8_t getPackedDarknessScore(const uint8_t* packedScores, const size_t idx) {
+  const uint8_t packed = packedScores[idx / 2];
+  return (idx & 1u) == 0 ? static_cast<uint8_t>(packed >> 4) : static_cast<uint8_t>(packed & 0x0Fu);
+}
+
+inline void addPackedDarknessScore(uint8_t* packedScores, const size_t idx, const uint8_t increment) {
+  constexpr uint8_t kMaxScore = 0x0F;
+  const size_t byteIndex = idx / 2;
+  const bool useLowNibble = (idx & 1u) != 0;
+  const uint8_t current = useLowNibble ? static_cast<uint8_t>(packedScores[byteIndex] & 0x0Fu)
+                                       : static_cast<uint8_t>(packedScores[byteIndex] >> 4);
+  const uint8_t updated = static_cast<uint8_t>(std::min<uint16_t>(kMaxScore, current + increment));
+
+  if (useLowNibble) {
+    packedScores[byteIndex] = static_cast<uint8_t>((packedScores[byteIndex] & 0xF0u) | updated);
+  } else {
+    packedScores[byteIndex] = static_cast<uint8_t>((packedScores[byteIndex] & 0x0Fu) | (updated << 4));
+  }
+}
+
 bool buildMonochromePageBitmap(const Xtc& xtc, const xtc::PageInfo& pageInfo, const uint32_t pageIndex,
                                const uint16_t outWidth, const uint16_t outHeight,
                                std::vector<uint8_t>& outBitmap) {
@@ -33,11 +54,18 @@ bool buildMonochromePageBitmap(const Xtc& xtc, const xtc::PageInfo& pageInfo, co
 
   const bool isDownscaled = outWidth < pageInfo.width || outHeight < pageInfo.height;
 
-  // Keep only a tiny per-output-pixel darkness score when downscaling. For
-  // full-size covers we write pixels directly to avoid any large extra buffer.
-  std::vector<uint8_t> darknessScores;
+  // Keep a compact packed darkness score when downscaling so Home thumbnail
+  // generation still fits when Bluetooth is enabled and heap is tight.
+  std::unique_ptr<uint8_t[]> darknessScores;
   if (isDownscaled) {
-    darknessScores.assign(static_cast<size_t>(outWidth) * outHeight, 0);
+    const size_t scoreCount = static_cast<size_t>(outWidth) * outHeight;
+    const size_t packedBytes = (scoreCount + 1) / 2;  // 4 bits per output pixel
+    darknessScores.reset(new (std::nothrow) uint8_t[packedBytes]());
+    if (!darknessScores) {
+      LOG_ERR("XTC", "Insufficient heap for thumbnail scratch buffer (%u bytes, free=%u)",
+              static_cast<unsigned>(packedBytes), static_cast<unsigned>(ESP.getFreeHeap()));
+      return false;
+    }
   }
 
   auto accumulateScaledDarkness = [&](const uint16_t srcX, const uint16_t srcY, const uint8_t darkness) {
@@ -63,8 +91,9 @@ bool buildMonochromePageBitmap(const Xtc& xtc, const xtc::PageInfo& pageInfo, co
       increment = 1;
     }
 
-    const uint16_t sum = static_cast<uint16_t>(darknessScores[idx]) + increment;
-    darknessScores[idx] = static_cast<uint8_t>(std::min<uint16_t>(255, sum));
+    if (increment > 0) {
+      addPackedDarknessScore(darknessScores.get(), idx, increment);
+    }
   };
 
   if (pageInfo.bitDepth == 2) {
@@ -182,12 +211,12 @@ bool buildMonochromePageBitmap(const Xtc& xtc, const xtc::PageInfo& pageInfo, co
     const uint32_t approxSamplesPerPixel =
         std::max<uint32_t>(1, ((static_cast<uint32_t>(pageInfo.width) + outWidth - 1) / outWidth) *
                                   ((static_cast<uint32_t>(pageInfo.height) + outHeight - 1) / outHeight));
-    const uint8_t darknessThreshold = static_cast<uint8_t>(std::min<uint32_t>(24, approxSamplesPerPixel + 2));
+    const uint8_t darknessThreshold = static_cast<uint8_t>(std::min<uint32_t>(12, approxSamplesPerPixel + 2));
 
     for (uint16_t y = 0; y < outHeight; y++) {
       for (uint16_t x = 0; x < outWidth; x++) {
         const size_t idx = static_cast<size_t>(y) * outWidth + x;
-        if (darknessScores[idx] >= darknessThreshold) {
+        if (getPackedDarknessScore(darknessScores.get(), idx) >= darknessThreshold) {
           markMonoBitmapBlack(outBitmap, dstRowSize, x, y);
         }
       }
@@ -439,9 +468,25 @@ bool Xtc::generateThumbBmp(int height) const {
       return false;
     }
 
-  // Use requested height (capped) for better quality while keeping memory bounded.
-  const int thumbTargetHeight = std::max(180, std::min(height, 320));
+  // Use requested height when possible, but shrink under low heap so returning
+  // to Home with Bluetooth connected does not abort during thumb generation.
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  int maxThumbHeight = 320;
+  if (freeHeap < 80000) {
+    maxThumbHeight = 200;
+  } else if (freeHeap < 100000) {
+    maxThumbHeight = 240;
+  } else if (freeHeap < 120000) {
+    maxThumbHeight = 280;
+  }
+
+  const int thumbTargetHeight = std::max(180, std::min(height, maxThumbHeight));
   const int thumbTargetWidth = std::max(120, (thumbTargetHeight * 2) / 3);
+
+  if (maxThumbHeight != 320) {
+    LOG_DBG("XTC", "Low heap detected before thumb generation (%u bytes), capping target to %dpx tall",
+            static_cast<unsigned>(freeHeap), thumbTargetHeight);
+  }
 
   // Calculate scale factor
   float scaleX = static_cast<float>(thumbTargetWidth) / pageInfo.width;
@@ -467,8 +512,11 @@ bool Xtc::generateThumbBmp(int height) const {
   if (thumbWidth < 1) thumbWidth = 1;
   if (thumbHeight < 1) thumbHeight = 1;
 
-  LOG_DBG("XTC", "Generating thumb BMP: %dx%d -> %dx%d (scale: %.3f)", pageInfo.width, pageInfo.height,
-          thumbWidth, thumbHeight, scale);
+  const size_t approxBitmapBytes = ((static_cast<size_t>(thumbWidth) + 7) / 8) * thumbHeight;
+  const size_t approxScratchBytes = (static_cast<size_t>(thumbWidth) * thumbHeight + 1) / 2;
+  LOG_DBG("XTC", "Generating thumb BMP: %dx%d -> %dx%d (scale: %.3f, free=%u, scratch~%u)",
+          pageInfo.width, pageInfo.height, thumbWidth, thumbHeight, scale, static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(approxBitmapBytes + approxScratchBytes));
 
   std::vector<uint8_t> thumbBitmap;
   if (!buildMonochromePageBitmap(*this, pageInfo, 0, thumbWidth, thumbHeight, thumbBitmap)) {

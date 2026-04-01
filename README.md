@@ -14,7 +14,17 @@ If your remote connects but buttons do not work, try custom key mapping. If it s
 
 ## Release Highlights
 
-### v1.1.1-ble.17 (latest)
+### v1.1.1-ble.19 (latest)
+
+- **Firmware downloads**:
+  - Single image: [crosspoint-reader-ble-v1.1.1-ble.19-firmware.bin](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.19/crosspoint-reader-ble-v1.1.1-ble.19-firmware.bin)
+  - Full flash bundle (bootloader + partitions + firmware + instructions): [crosspoint-reader-ble-v1.1.1-ble.19-full-flash.zip](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.19/crosspoint-reader-ble-v1.1.1-ble.19-full-flash.zip)
+  - Checksums: [SHA256SUMS.txt](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.19/SHA256SUMS.txt)
+- **Fixes the Bluetooth-connected Home panic** when returning to the main menu and recent-book previews refresh.
+- **XTC / XTCH thumbnails now stay low-memory under BLE load**, so large books can regenerate Home covers without aborting.
+- **Includes the recent XTC stability work** for SD-streamed paging, cover generation, and silent GitHub release builds.
+
+### v1.1.1-ble.17
 
 - **Firmware downloads**:
   - Single image: [crosspoint-reader-ble-v1.1.1-ble.17-firmware.bin](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.17/crosspoint-reader-ble-v1.1.1-ble.17-firmware.bin)
