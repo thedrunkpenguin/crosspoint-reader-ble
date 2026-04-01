@@ -28,6 +28,8 @@ XtcParser::XtcParser()
 XtcParser::~XtcParser() { close(); }
 
 XtcError XtcParser::open(const char* filepath) {
+  HalStorage::LockGuard storageLock(Storage);
+
   // Close if already open
   if (m_isOpen) {
     close();
@@ -85,6 +87,8 @@ XtcError XtcParser::open(const char* filepath) {
 }
 
 void XtcParser::close() {
+  HalStorage::LockGuard storageLock(Storage);
+
   if (m_isOpen) {
     m_file.close();
     m_isOpen = false;
@@ -318,6 +322,8 @@ bool XtcParser::getPageInfo(uint32_t pageIndex, PageInfo& info) const {
 }
 
 size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSize) {
+  HalStorage::LockGuard storageLock(Storage);
+
   if (!m_isOpen) {
     m_lastError = XtcError::FILE_NOT_FOUND;
     return 0;
@@ -388,6 +394,10 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
 XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
                                       std::function<void(const uint8_t* data, size_t size, size_t offset)> callback,
                                       size_t chunkSize) {
+  // Keep the shared SD card locked for the full streaming read so page rendering
+  // cannot race against progress/pet saves from another task.
+  HalStorage::LockGuard storageLock(Storage);
+
   if (!m_isOpen) {
     return XtcError::FILE_NOT_FOUND;
   }

@@ -192,6 +192,7 @@ void XtcReaderActivity::renderPage() {
     const uint32_t pageDataOffset = pageInfo.offset + sizeof(xtc::XtgPageHeader);
 
     auto withPageFile = [&](size_t byteOffset, auto&& callback) -> bool {
+      HalStorage::LockGuard storageLock(Storage);
       FsFile pageFile;
       if (!Storage.openFileForRead("XTR", xtc->getPath(), pageFile)) {
         LOG_ERR("XTR", "Failed to open XTCH file for streaming: %s", xtc->getPath().c_str());
@@ -230,6 +231,7 @@ void XtcReaderActivity::renderPage() {
     };
 
     auto forEachPlanePairByte = [&](auto&& visitPair) -> bool {
+      HalStorage::LockGuard storageLock(Storage);
       FsFile plane1File;
       FsFile plane2File;
       if (!Storage.openFileForRead("XTR", xtc->getPath(), plane1File) ||
@@ -471,24 +473,33 @@ void XtcReaderActivity::renderPage() {
 }
 
 void XtcReaderActivity::saveProgress() const {
+  HalStorage::LockGuard storageLock(Storage);
   FsFile f;
   if (Storage.openFileForWrite("XTR", xtc->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[4];
+    const uint32_t totalPages = xtc ? xtc->getPageCount() : 0;
+    uint8_t data[8];
     data[0] = currentPage & 0xFF;
     data[1] = (currentPage >> 8) & 0xFF;
     data[2] = (currentPage >> 16) & 0xFF;
     data[3] = (currentPage >> 24) & 0xFF;
-    f.write(data, 4);
+    data[4] = totalPages & 0xFF;
+    data[5] = (totalPages >> 8) & 0xFF;
+    data[6] = (totalPages >> 16) & 0xFF;
+    data[7] = (totalPages >> 24) & 0xFF;
+    f.write(data, sizeof(data));
     f.close();
   }
 }
 
 void XtcReaderActivity::loadProgress() {
+  HalStorage::LockGuard storageLock(Storage);
   FsFile f;
   if (Storage.openFileForRead("XTR", xtc->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[4];
-    if (f.read(data, 4) == 4) {
-      currentPage = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+    uint8_t data[8] = {0};
+    const int read = f.read(data, sizeof(data));
+    if (read >= 4) {
+      currentPage = static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8) |
+                    (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
       LOG_DBG("XTR", "Loaded progress: page %lu", currentPage);
 
       // Validate page number

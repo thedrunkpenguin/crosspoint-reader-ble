@@ -11,11 +11,21 @@ class HalStorage {
  public:
   class LockGuard {
    public:
-    explicit LockGuard(const HalStorage& storage) : storage_(storage) { storage_.lock(); }
-    ~LockGuard() { storage_.unlock(); }
+    explicit LockGuard(const HalStorage& storage) : storage_(storage), locked_(true) { storage_.lock(); }
+    ~LockGuard() {
+      if (locked_) {
+        storage_.unlock();
+      }
+    }
+
+    LockGuard(const LockGuard&) = delete;
+    LockGuard& operator=(const LockGuard&) = delete;
+    LockGuard(LockGuard&&) = delete;
+    LockGuard& operator=(LockGuard&&) = delete;
 
    private:
     const HalStorage& storage_;
+    bool locked_ = false;
   };
 
   HalStorage();

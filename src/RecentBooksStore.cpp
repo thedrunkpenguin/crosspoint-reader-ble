@@ -87,24 +87,31 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
 
   LOG_DBG("RBS", "Loading recent book: %s", path.c_str());
 
-  // If epub, try to load the metadata for title/author and cover.
-  // Use buildIfMissing=false to avoid heavy epub loading on boot; getTitle()/getAuthor() may be
-  // blank until the book is opened, and entries with missing title are omitted from recent list.
-  if (StringUtils::checkFileExtension(lastBookFileName, ".epub")) {
-    Epub epub(path, "/.crosspoint");
-    epub.load(false, true);
-    return RecentBook{path, epub.getTitle(), epub.getAuthor(), epub.getThumbBmpPath()};
-  } else if (StringUtils::checkFileExtension(lastBookFileName, ".xtch") ||
-             StringUtils::checkFileExtension(lastBookFileName, ".xtc")) {
-    // Handle XTC file
-    Xtc xtc(path, "/.crosspoint");
-    if (xtc.load()) {
-      return RecentBook{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
+  try {
+    // If epub, try to load the metadata for title/author and cover.
+    // Use buildIfMissing=false to avoid heavy epub loading on boot; getTitle()/getAuthor() may be
+    // blank until the book is opened, and entries with missing title are omitted from recent list.
+    if (StringUtils::checkFileExtension(lastBookFileName, ".epub")) {
+      Epub epub(path, "/.crosspoint");
+      epub.load(false, true);
+      return RecentBook{path, epub.getTitle(), epub.getAuthor(), epub.getThumbBmpPath()};
+    } else if (StringUtils::checkFileExtension(lastBookFileName, ".xtch") ||
+               StringUtils::checkFileExtension(lastBookFileName, ".xtc")) {
+      // Handle XTC file
+      Xtc xtc(path, "/.crosspoint");
+      if (xtc.load()) {
+        return RecentBook{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
+      }
+    } else if (StringUtils::checkFileExtension(lastBookFileName, ".txt") ||
+               StringUtils::checkFileExtension(lastBookFileName, ".md")) {
+      return RecentBook{path, lastBookFileName, "", ""};
     }
-  } else if (StringUtils::checkFileExtension(lastBookFileName, ".txt") ||
-             StringUtils::checkFileExtension(lastBookFileName, ".md")) {
-    return RecentBook{path, lastBookFileName, "", ""};
+  } catch (const std::exception& e) {
+    LOG_ERR("RBS", "Exception loading recent book metadata for %s: %s", path.c_str(), e.what());
+  } catch (...) {
+    LOG_ERR("RBS", "Unknown exception loading recent book metadata for %s", path.c_str());
   }
+
   return RecentBook{path, "", "", ""};
 }
 

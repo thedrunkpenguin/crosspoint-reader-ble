@@ -103,68 +103,104 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
   int progress = 0;
   for (RecentBook& book : recentBooks) {
-    if (!book.coverBmpPath.empty()) {
-      std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
-      bool needsThumbGeneration = !Storage.exists(coverPath.c_str());
+    const bool isEpub = StringUtils::checkFileExtension(book.path, ".epub");
+    const bool isXtc = StringUtils::checkFileExtension(book.path, ".xtch") ||
+                       StringUtils::checkFileExtension(book.path, ".xtc");
 
-      if (!needsThumbGeneration) {
-        FsFile coverFile;
-        if (Storage.openFileForRead("HOM", coverPath, coverFile)) {
-          Bitmap bitmap(coverFile);
-          if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-            const int minDesiredHeight = isCardsTheme ? std::max(180, coverHeight - 8)
-                                                       : std::max(120, (coverHeight * 3) / 4);
-            const int minDesiredWidth = std::max(80, (minDesiredHeight * 2) / 3);
-            if (bitmap.getHeight() < minDesiredHeight || bitmap.getWidth() < minDesiredWidth) {
-              needsThumbGeneration = true;
-            }
-            if (isCardsTheme && StringUtils::checkFileExtension(book.path, ".epub") && bitmap.getBpp() == 1) {
-              needsThumbGeneration = true;
-            }
-          } else {
+    if (!isEpub && !isXtc) {
+      progress++;
+      continue;
+    }
+
+    // Keep cached thumb paths current so older recent-book entries regenerate
+    // after thumbnail format tweaks.
+    if (isXtc) {
+      const std::string expectedThumbPath = Xtc(book.path, "/.crosspoint").getThumbBmpPath();
+      if (book.coverBmpPath != expectedThumbPath) {
+        book.coverBmpPath = expectedThumbPath;
+        RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
+      }
+    }
+
+    const std::string coverPath = book.coverBmpPath.empty() ? "" : UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
+    bool needsThumbGeneration = book.coverBmpPath.empty() || coverPath.empty() || !Storage.exists(coverPath.c_str());
+
+    if (!needsThumbGeneration) {
+      FsFile coverFile;
+      if (Storage.openFileForRead("HOM", coverPath, coverFile)) {
+        Bitmap bitmap(coverFile);
+        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+          const int minDesiredHeight = isCardsTheme ? std::max(180, coverHeight - 8)
+                                                     : std::max(120, (coverHeight * 3) / 4);
+          const int minDesiredWidth = std::max(80, (minDesiredHeight * 2) / 3);
+          if (bitmap.getHeight() < minDesiredHeight || bitmap.getWidth() < minDesiredWidth) {
             needsThumbGeneration = true;
           }
-          coverFile.close();
+          if (isCardsTheme && isEpub && bitmap.getBpp() == 1) {
+            needsThumbGeneration = true;
+          }
         } else {
           needsThumbGeneration = true;
         }
+        coverFile.close();
+      } else {
+        needsThumbGeneration = true;
       }
+    }
 
-      if (needsThumbGeneration) {
-        Storage.remove(coverPath.c_str());
-        if (StringUtils::checkFileExtension(book.path, ".epub")) {
-          Epub epub(book.path, "/.crosspoint");
-          epub.load(false, true);
+    if (needsThumbGeneration && !coverPath.empty()) {
+      Storage.remove(coverPath.c_str());
+    }
 
-          if (!showingLoading) {
-            showingLoading = true;
-            popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-          }
-          GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / std::max(1, static_cast<int>(recentBooks.size()))));
-          bool success = epub.generateThumbBmp(coverHeight);
-          if (!success) {
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
-            book.coverBmpPath = "";
-          }
-          coverRendered = false;
-          requestUpdate();
-        } else if (StringUtils::checkFileExtension(book.path, ".xtch") ||
-                   StringUtils::checkFileExtension(book.path, ".xtc")) {
+    if (needsThumbGeneration) {
+      if (isEpub) {
+        Epub epub(book.path, "/.crosspoint");
+        epub.load(false, true);
+
+        if (!showingLoading) {
+          showingLoading = true;
+          popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+        }
+        GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / std::max(1, static_cast<int>(recentBooks.size()))));
+        bool success = epub.generateThumbBmp(coverHeight);
+        if (success) {
+          book.coverBmpPath = epub.getThumbBmpPath();
+          RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
+        } else {
+          RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
+          book.coverBmpPath = "";
+        }
+        coverRendered = false;
+        requestUpdate();
+      } else if (isXtc) {
+        try {
           Xtc xtc(book.path, "/.crosspoint");
           if (xtc.load()) {
             if (!showingLoading) {
               showingLoading = true;
               popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
             }
-            GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / std::max(1, static_cast<int>(recentBooks.size()))));
+            GUI.fillPopupProgress(renderer, popupRect,
+                                  10 + progress * (90 / std::max(1, static_cast<int>(recentBooks.size()))));
             bool success = xtc.generateThumbBmp(coverHeight);
-            if (!success) {
+            if (success) {
+              book.coverBmpPath = xtc.getThumbBmpPath();
+              RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
+            } else {
               RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
               book.coverBmpPath = "";
             }
             coverRendered = false;
             requestUpdate();
           }
+        } catch (const std::exception& e) {
+          LOG_ERR("HOM", "Exception generating XTC cover for %s: %s", book.path.c_str(), e.what());
+          RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
+          book.coverBmpPath = "";
+        } catch (...) {
+          LOG_ERR("HOM", "Unknown exception generating XTC cover for %s", book.path.c_str());
+          RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
+          book.coverBmpPath = "";
         }
       }
     }
@@ -324,26 +360,39 @@ int HomeActivity::getRecentBookProgressPercent(const RecentBook& book) const {
   if (StringUtils::checkFileExtension(book.path, ".xtch") || StringUtils::checkFileExtension(book.path, ".xtc")) {
     const std::string progressPath = std::string("/.crosspoint/xtc_") + std::to_string(hash) + "/progress.bin";
     uint32_t currentPage = 0;
+    uint32_t totalPages = 0;
 
     {
       FsFile f;
       if (Storage.openFileForRead("HOM", progressPath, f)) {
-        uint8_t data[4] = {0};
-        const int read = f.read(data, 4);
+        uint8_t data[8] = {0};
+        const int read = f.read(data, sizeof(data));
         f.close();
-        if (read == 4) {
+        if (read >= 4) {
           currentPage = static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8) |
                         (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
+        }
+        if (read >= 8) {
+          totalPages = static_cast<uint32_t>(data[4]) | (static_cast<uint32_t>(data[5]) << 8) |
+                       (static_cast<uint32_t>(data[6]) << 16) | (static_cast<uint32_t>(data[7]) << 24);
         }
       }
     }
 
-    Xtc xtc(book.path, "/.crosspoint");
-    if (xtc.load()) {
-      const uint32_t totalPages = xtc.getPageCount();
-      if (totalPages > 0) {
-        return clampPercent(static_cast<int>((currentPage + 1) * 100 / totalPages));
+    if (totalPages == 0) {
+      FsFile f;
+      if (Storage.openFileForRead("HOM", book.path, f)) {
+        xtc::XtcHeader header{};
+        if (f.read(reinterpret_cast<uint8_t*>(&header), sizeof(header)) == sizeof(header) &&
+            (header.magic == xtc::XTC_MAGIC || header.magic == xtc::XTCH_MAGIC)) {
+          totalPages = header.pageCount;
+        }
+        f.close();
       }
+    }
+
+    if (totalPages > 0) {
+      return clampPercent(static_cast<int>((currentPage + 1) * 100 / totalPages));
     }
     return 0;
   }

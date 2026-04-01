@@ -35,6 +35,11 @@ class ScopedPetPersistenceLock {
     }
   }
 
+  ScopedPetPersistenceLock(const ScopedPetPersistenceLock&) = delete;
+  ScopedPetPersistenceLock& operator=(const ScopedPetPersistenceLock&) = delete;
+  ScopedPetPersistenceLock(ScopedPetPersistenceLock&&) = delete;
+  ScopedPetPersistenceLock& operator=(ScopedPetPersistenceLock&&) = delete;
+
   bool locked() const { return locked_; }
 
  private:
