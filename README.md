@@ -14,7 +14,17 @@ If your remote connects but buttons do not work, try custom key mapping. If it s
 
 ## Release Highlights
 
-### v1.1.1-ble.15 (latest)
+### v1.1.1-ble.16 (latest)
+
+- **Firmware downloads**:
+  - Single image: [crosspoint-reader-ble-v1.1.1-ble.16-firmware.bin](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.16/crosspoint-reader-ble-v1.1.1-ble.16-firmware.bin)
+  - Full flash bundle (bootloader + partitions + firmware + instructions): [crosspoint-reader-ble-v1.1.1-ble.16-full-flash.zip](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.16/crosspoint-reader-ble-v1.1.1-ble.16-full-flash.zip)
+  - Checksums: [SHA256SUMS.txt](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.16/SHA256SUMS.txt)
+- **Large XTC / XTCH books now open reliably**: page rendering now streams directly from SD instead of allocating a full extra page bitmap in RAM, eliminating the out-of-memory error seen on large files and verified with a 100+ MB test file.
+- **GameBrick chapter skip is more reliable**: long `B` holds are now merged correctly so backward chapter skip is less likely to fall through into a quick page-back.
+- **Free2 long-press behavior stays isolated** so the Free2 workaround no longer changes hold timing semantics for other BLE remotes.
+
+### v1.1.1-ble.15
 
 - **Firmware downloads**:
   - Single image: [crosspoint-reader-ble-v1.1.1-ble.15-firmware.bin](https://github.com/thedrunkpenguin/crosspoint-reader-ble/releases/download/v1.1.1-ble.15/crosspoint-reader-ble-v1.1.1-ble.15-firmware.bin)

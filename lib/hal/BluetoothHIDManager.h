@@ -48,6 +48,10 @@ struct ConnectedDevice {
   uint16_t lastGameBrickCounter = 0xFFFF;  // For counter-freeze detection (button vs joystick)
   uint8_t lastGameBrickActiveKey = 0x00;   // Latched first key per freeze-window (prevents overshoot misfires)
   uint8_t gameBrickCenterPressFrames = 0;  // Centered horizontal active-frame streak (LEFT fallback)
+  bool pendingGameBrickRelease = false;    // Delay short A/B release tails so one long hold stays merged
+  unsigned long pendingGameBrickReleaseMs = 0;
+  uint8_t pendingGameBrickKeycode = 0x00;
+  uint8_t pendingGameBrickButton = 0xFF;
 };
 
 class BluetoothHIDManager {

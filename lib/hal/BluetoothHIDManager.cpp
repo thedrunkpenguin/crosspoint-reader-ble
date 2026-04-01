@@ -782,12 +782,15 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   if (!device) return;
 
   const unsigned long nowMs = millis();
+  const bool free2Profile = isFree2Profile(device->profile);
 
   // GameBrick can occasionally miss a release tail, leaving a virtual button
   // latched as pressed. After a long idle gap, clear stale hold state so the
   // next tap is always treated as a fresh press.
+  // Keep this comfortably above the reader's 700ms chapter-skip threshold so
+  // a legitimate long press is not force-released early.
   if (device->profile && strncmp(device->profile->name, "IINE Game Brick", 15) == 0) {
-    constexpr unsigned long STALE_GAMEBRICK_HOLD_RESET_MS = 600;
+    constexpr unsigned long STALE_GAMEBRICK_HOLD_RESET_MS = 1200;
     if (device->activeInjectedButton != 0xFF &&
         device->lastNormalizedEventMs > 0 &&
         (nowMs - device->lastNormalizedEventMs) > STALE_GAMEBRICK_HOLD_RESET_MS) {
@@ -806,8 +809,10 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   
   // Update activity timestamp to keep connection alive
   device->lastActivityTime = millis();
-  // Notify HalGPIO of hold activity so getHeldTime() caps at real physical duration
-  if (g_instance->_buttonActivityNotifier && device->activeInjectedButton != 0xFF) {
+  // Only Free2 needs hold-time capping based on BLE activity. Other remotes,
+  // including GameBrick, should keep the original virtual hold semantics so
+  // long-press chapter skip continues to use the full press duration.
+  if (free2Profile && g_instance->_buttonActivityNotifier && device->activeInjectedButton != 0xFF) {
     g_instance->_buttonActivityNotifier(device->activeInjectedButton);
   }
 
@@ -827,6 +832,10 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
       g_instance->_buttonInjector(device->activeInjectedButton, false);
     }
     device->activeInjectedButton = 0xFF;
+    device->pendingGameBrickRelease = false;
+    device->pendingGameBrickReleaseMs = 0;
+    device->pendingGameBrickKeycode = 0x00;
+    device->pendingGameBrickButton = 0xFF;
   };
   
   // Extract keycode based on device profile or auto-detect
@@ -1152,7 +1161,6 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
     return;
   }
 
-  const bool free2Profile = isFree2Profile(device->profile);
   const uint8_t free2Direction = free2Profile ? classifyFree2Direction(keycode) : 0xFF;
 
   // Detect button PRESS transition.
@@ -1228,6 +1236,23 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
     }
   }
 
+  const bool isGameBrickActionKey = isGameBrickProfile &&
+                                    (keycode == GAMEBRICK_ACTION_A_CODE || keycode == GAMEBRICK_ACTION_B_CODE);
+  const uint8_t gameBrickActionButton = isGameBrickActionKey ? g_instance->mapKeycodeToButton(keycode, device) : 0xFF;
+
+  if (device->pendingGameBrickRelease) {
+    if (isPressed && keycode == device->pendingGameBrickKeycode && mappedButton == device->pendingGameBrickButton) {
+      device->pendingGameBrickRelease = false;
+      device->pendingGameBrickReleaseMs = 0;
+      device->pendingGameBrickKeycode = 0x00;
+      device->pendingGameBrickButton = 0xFF;
+      mappedButton = device->activeInjectedButton;
+      isNewPressEvent = false;
+    } else if (isPressed && mappedButton != device->pendingGameBrickButton) {
+      releaseInjectedButton();
+    }
+  }
+
   if (isGameBrickProfile && g_instance->_debugCaptureEnabled && isPressed) {
     const char* keyLabel = "Unknown";
     switch (keycode) {
@@ -1287,7 +1312,15 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
   }
 
   if (!isPressed || mappedButton == 0xFF) {
-    releaseInjectedButton();
+    if (isGameBrickActionKey && device->activeInjectedButton == gameBrickActionButton && gameBrickActionButton != 0xFF) {
+      constexpr unsigned long GAMEBRICK_ACTION_RELEASE_GRACE_MS = 110;
+      device->pendingGameBrickRelease = true;
+      device->pendingGameBrickReleaseMs = nowMs + GAMEBRICK_ACTION_RELEASE_GRACE_MS;
+      device->pendingGameBrickKeycode = keycode;
+      device->pendingGameBrickButton = gameBrickActionButton;
+    } else {
+      releaseInjectedButton();
+    }
   } else {
     if (device->activeInjectedButton != 0xFF && device->activeInjectedButton != mappedButton) {
       releaseInjectedButton();
@@ -1553,6 +1586,23 @@ uint8_t BluetoothHIDManager::mapKeycodeToButton(uint8_t keycode, ConnectedDevice
 
 void BluetoothHIDManager::updateActivity() {
   unsigned long now = millis();
+
+  for (auto& device : _connectedDevices) {
+    if (device.pendingGameBrickRelease && device.pendingGameBrickReleaseMs > 0 && now >= device.pendingGameBrickReleaseMs) {
+      if (_buttonInjector && device.activeInjectedButton != 0xFF) {
+        _buttonInjector(device.activeInjectedButton, false);
+      }
+      device.activeInjectedButton = 0xFF;
+      device.lastButtonState = false;
+      device.lastHIDKeycode = 0x00;
+      device.lastNormalizedPressed = false;
+      device.pendingGameBrickRelease = false;
+      device.pendingGameBrickReleaseMs = 0;
+      device.pendingGameBrickKeycode = 0x00;
+      device.pendingGameBrickButton = 0xFF;
+      LOG_DBG("BT", "Game Brick: released deferred action button for %s", device.address.c_str());
+    }
+  }
 
   // Fast path: release stale injected buttons promptly for Free2 only.
   // Free2 often omits timely release frames; other remotes should keep their prior behavior.

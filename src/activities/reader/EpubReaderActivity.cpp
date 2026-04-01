@@ -265,8 +265,15 @@ void EpubReaderActivity::loop() {
                                     mappedInput.wasPressed(MappedInputManager::Button::Right))
                                  : (mappedInput.wasReleased(MappedInputManager::Button::PageForward) || powerPageTurn ||
                                     mappedInput.wasReleased(MappedInputManager::Button::Right));
+  const bool prevHeldNow = mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
+                           mappedInput.isPressed(MappedInputManager::Button::Left);
+  const bool nextHeldNow = mappedInput.isPressed(MappedInputManager::Button::PageForward) ||
+                           mappedInput.isPressed(MappedInputManager::Button::Right);
 
-  if (!prevTriggered && !nextTriggered) {
+  if (chapterSkipConsumedForHold) {
+    if (!prevHeldNow && !nextHeldNow && !prevTriggered && !nextTriggered) {
+      chapterSkipConsumedForHold = false;
+    }
     return;
   }
 
@@ -280,6 +287,26 @@ void EpubReaderActivity::loop() {
     currentSpineIndex = epub->getSpineItemsCount() - 1;
     nextPageNumber = UINT16_MAX;
     requestUpdate();
+    return;
+  }
+
+  const bool skipChapterFromHold = SETTINGS.longPressChapterSkip &&
+                                   ((prevHeldNow && prevHeldMs > skipChapterMs) ||
+                                    (nextHeldNow && nextHeldMs > skipChapterMs));
+
+  if (skipChapterFromHold) {
+    chapterSkipConsumedForHold = true;
+    {
+      RenderLock lock(*this);
+      nextPageNumber = 0;
+      currentSpineIndex = nextHeldNow ? currentSpineIndex + 1 : currentSpineIndex - 1;
+      section.reset();
+    }
+    requestUpdate();
+    return;
+  }
+
+  if (!prevTriggered && !nextTriggered) {
     return;
   }
 
