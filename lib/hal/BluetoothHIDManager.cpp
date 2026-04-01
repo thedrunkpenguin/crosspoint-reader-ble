@@ -765,6 +765,17 @@ bool BluetoothHIDManager::hasRecentActivity() const {
   return false;
 }
 
+bool BluetoothHIDManager::hadRecentFree2Input(unsigned long windowMs) const {
+  const unsigned long now = millis();
+  for (const auto& device : _connectedDevices) {
+    if (isFree2Profile(device.profile) && device.lastNormalizedEventMs > 0 &&
+        (now - device.lastNormalizedEventMs) <= windowMs) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Static callback for HID notifications
 void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
   if (!g_instance || !pData || length == 0) return;
@@ -1358,6 +1369,11 @@ void BluetoothHIDManager::onHIDNotify(NimBLERemoteCharacteristic* pChar, uint8_t
       LOG_INF("BT", "Mapped key 0x%02X -> %s", keycode, buttonName);
       g_instance->_buttonInjector(mappedButton, true);
       device->activeInjectedButton = mappedButton;
+      if (free2Profile && g_instance->_buttonActivityNotifier) {
+        // Seed the hold timer on the very first injected Free2 press. This keeps a
+        // missing release frame from letting a short tap age into a long-press skip.
+        g_instance->_buttonActivityNotifier(mappedButton);
+      }
       device->lastInjectionTime = millis();
       device->lastInjectedKeycode = keycode;
       }

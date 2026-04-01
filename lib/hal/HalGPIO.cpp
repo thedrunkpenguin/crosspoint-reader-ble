@@ -56,7 +56,7 @@ unsigned long HalGPIO::getHeldTime(uint8_t buttonIndex) const {
   if (virtualButtonState & mask) {
     // Cap at last BLE activity time so a short physical press doesn't accumulate
     // stale-window time toward the long-press chapter-skip threshold.
-    if (virtualLastActivityTime[buttonIndex] > virtualPressStart[buttonIndex]) {
+    if (virtualLastActivityTime[buttonIndex] >= virtualPressStart[buttonIndex]) {
       return virtualLastActivityTime[buttonIndex] - virtualPressStart[buttonIndex];
     }
     return millis() - virtualPressStart[buttonIndex];
@@ -85,8 +85,10 @@ void HalGPIO::setVirtualButtonState(uint8_t buttonIndex, bool pressed) {
     virtualPressStart[buttonIndex] = millis();
   } else {
     desiredVirtualButtonState &= ~mask;
-    // Use last BLE activity time so getHeldTime() reflects actual physical hold duration
-    virtualPressFinish[buttonIndex] = (virtualLastActivityTime[buttonIndex] > virtualPressStart[buttonIndex])
+    // Use last BLE activity time so getHeldTime() reflects actual physical hold duration.
+    // `>=` matters here because the first valid HID report can land in the same millisecond
+    // as the synthetic press injection.
+    virtualPressFinish[buttonIndex] = (virtualLastActivityTime[buttonIndex] >= virtualPressStart[buttonIndex])
                         ? virtualLastActivityTime[buttonIndex]
                         : millis();
     virtualLastActivityTime[buttonIndex] = 0;

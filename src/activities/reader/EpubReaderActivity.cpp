@@ -15,6 +15,7 @@
 #include "KOReaderSyncActivity.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include <BluetoothHIDManager.h>
 #include "activities/settings/BluetoothSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -252,8 +253,18 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  // Free2 stays page-turn-only. Its rolling HID reports are fine for paging but not
+  // reliable enough for per-book chapter-skip semantics.
+  bool allowLongPressChapterSkip = SETTINGS.longPressChapterSkip;
+  try {
+    allowLongPressChapterSkip = SETTINGS.longPressChapterSkip &&
+                                !BluetoothHIDManager::getInstance().hadRecentFree2Input();
+  } catch (...) {
+    allowLongPressChapterSkip = SETTINGS.longPressChapterSkip;
+  }
+
   // When long-press chapter skip is disabled, turn pages on press instead of release.
-  const bool usePressForPageTurn = !SETTINGS.longPressChapterSkip;
+  const bool usePressForPageTurn = !allowLongPressChapterSkip;
   const bool prevTriggered = usePressForPageTurn ? (mappedInput.wasPressed(MappedInputManager::Button::PageBack) ||
                                                     mappedInput.wasPressed(MappedInputManager::Button::Left))
                                                  : (mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
@@ -290,7 +301,7 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  const bool skipChapterFromHold = SETTINGS.longPressChapterSkip &&
+  const bool skipChapterFromHold = allowLongPressChapterSkip &&
                                    ((prevHeldNow && prevHeldMs > skipChapterMs) ||
                                     (nextHeldNow && nextHeldMs > skipChapterMs));
 
@@ -310,7 +321,7 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  const bool skipChapter = SETTINGS.longPressChapterSkip && ((prevTriggered ? prevHeldMs : nextHeldMs) > skipChapterMs);
+  const bool skipChapter = allowLongPressChapterSkip && ((prevTriggered ? prevHeldMs : nextHeldMs) > skipChapterMs);
 
   if (skipChapter) {
     // We don't want to delete the section mid-render, so grab the semaphore

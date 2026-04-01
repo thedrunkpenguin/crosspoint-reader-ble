@@ -92,6 +92,7 @@ public:
   // Check if BLE has had activity recently (within last 4 minutes)
   // Used by power manager to prevent sleep during BLE use
   bool hasRecentActivity() const;
+  bool hadRecentFree2Input(unsigned long windowMs = 1500) const;
 
   // State persistence
   void saveState();
