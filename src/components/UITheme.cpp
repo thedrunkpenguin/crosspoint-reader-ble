@@ -45,6 +45,11 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       currentTheme = std::make_unique<Lyra3CoversTheme>();
       currentMetrics = &Lyra3CoversMetrics::values;
       break;
+    case CrossPointSettings::UI_THEME::CARDS:
+      LOG_DBG("UI", "Using Cards theme");
+      currentTheme = std::make_unique<LyraTheme>();
+      currentMetrics = &LyraMetrics::values;
+      break;
   }
 }
 

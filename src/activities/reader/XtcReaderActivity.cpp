@@ -15,6 +15,7 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
+#include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
@@ -58,24 +59,26 @@ void XtcReaderActivity::loop() {
   // Enter chapter selection activity
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (xtc && xtc->hasChapters() && !xtc->getChapters().empty()) {
-      startActivityForResult(
-          std::make_unique<XtcReaderChapterSelectionActivity>(renderer, mappedInput, xtc, currentPage),
-          [this](const ActivityResult& result) {
-            if (!result.isCancelled) {
-              currentPage = std::get<PageResult>(result.data).page;
-            }
-          });
+      startActivityForResult(std::make_unique<XtcReaderChapterSelectionActivity>(this->renderer, this->mappedInput,
+                                                                                 xtc, currentPage),
+                             [this](const ActivityResult& result) {
+                               if (!result.isCancelled) {
+                                 currentPage = std::get<PageResult>(result.data).page;
+                               }
+                               requestUpdate();
+                             });
     }
   }
 
   // Long press BACK (1s+) goes to file selection
-  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= goHomeMs) {
+  const unsigned long backHeldMs = mappedInput.getHeldTime(MappedInputManager::Button::Back);
+  if (mappedInput.isPressed(MappedInputManager::Button::Back) && backHeldMs >= goHomeMs) {
     activityManager.goToFileBrowser(xtc ? xtc->getPath() : "");
     return;
   }
 
   // Short press BACK goes directly to home
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && mappedInput.getHeldTime() < goHomeMs) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && backHeldMs < goHomeMs) {
     onGoHome();
     return;
   }
@@ -98,6 +101,11 @@ void XtcReaderActivity::loop() {
     return;
   }
 
+  const unsigned long prevHeldMs = std::max(mappedInput.getHeldTime(MappedInputManager::Button::PageBack),
+                                            mappedInput.getHeldTime(MappedInputManager::Button::Left));
+  const unsigned long nextHeldMs = std::max(mappedInput.getHeldTime(MappedInputManager::Button::PageForward),
+                                            mappedInput.getHeldTime(MappedInputManager::Button::Right));
+
   // Handle end of book
   if (currentPage >= xtc->getPageCount()) {
     currentPage = xtc->getPageCount() - 1;
@@ -105,7 +113,8 @@ void XtcReaderActivity::loop() {
     return;
   }
 
-  const bool skipPages = SETTINGS.longPressChapterSkip && mappedInput.getHeldTime() > skipPageMs;
+  const bool skipPages = ReaderUtils::allowLongPressChapterSkip() &&
+                         ((prevTriggered ? prevHeldMs : nextHeldMs) > skipPageMs);
   const int skipAmount = skipPages ? 10 : 1;
 
   if (prevTriggered) {
@@ -143,35 +152,14 @@ void XtcReaderActivity::render(RenderLock&&) {
 }
 
 void XtcReaderActivity::renderPage() {
-  const uint16_t pageWidth = xtc->getPageWidth();
-  const uint16_t pageHeight = xtc->getPageHeight();
-  const uint8_t bitDepth = xtc->getBitDepth();
+  xtc::PageInfo pageInfo{};
+  const bool hasPageInfo = xtc->getPageInfo(currentPage, pageInfo);
+  const uint16_t pageWidth = hasPageInfo ? pageInfo.width : xtc->getPageWidth();
+  const uint16_t pageHeight = hasPageInfo ? pageInfo.height : xtc->getPageHeight();
+  const uint8_t bitDepth = hasPageInfo ? pageInfo.bitDepth : xtc->getBitDepth();
 
-  // Calculate buffer size for one page
-  // XTG (1-bit): Row-major, ((width+7)/8) * height bytes
-  // XTH (2-bit): Two bit planes, column-major, ((width * height + 7) / 8) * 2 bytes
-  size_t pageBufferSize;
-  if (bitDepth == 2) {
-    pageBufferSize = ((static_cast<size_t>(pageWidth) * pageHeight + 7) / 8) * 2;
-  } else {
-    pageBufferSize = ((pageWidth + 7) / 8) * pageHeight;
-  }
-
-  // Allocate page buffer
-  uint8_t* pageBuffer = static_cast<uint8_t*>(malloc(pageBufferSize));
-  if (!pageBuffer) {
-    LOG_ERR("XTR", "Failed to allocate page buffer (%lu bytes)", pageBufferSize);
-    renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_MEMORY_ERROR), true, EpdFontFamily::BOLD);
-    renderer.displayBuffer();
-    return;
-  }
-
-  // Load page data
-  size_t bytesRead = xtc->loadPage(currentPage, pageBuffer, pageBufferSize);
-  if (bytesRead == 0) {
-    LOG_ERR("XTR", "Failed to load page %lu", currentPage);
-    free(pageBuffer);
+  if (pageWidth == 0 || pageHeight == 0) {
+    LOG_ERR("XTR", "Invalid page geometry for page %lu: %ux%u", currentPage, pageWidth, pageHeight);
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
@@ -186,49 +174,132 @@ void XtcReaderActivity::renderPage() {
   const uint16_t maxSrcY = pageHeight;
 
   if (bitDepth == 2) {
-    // XTH 2-bit mode: Two bit planes, column-major order
-    // - Columns scanned right to left (x = width-1 down to 0)
-    // - 8 vertical pixels per byte (MSB = topmost pixel in group)
-    // - First plane: Bit1, Second plane: Bit2
-    // - Pixel value = (bit1 << 1) | bit2
-    // - Grayscale: 0=White, 1=Dark Grey, 2=Light Grey, 3=Black
-
+    // XTCH 2-bit pages are rendered in streaming passes to avoid the extra ~96KB
+    // full-page heap allocation. This keeps large grayscale books openable on-device.
     const size_t planeSize = (static_cast<size_t>(pageWidth) * pageHeight + 7) / 8;
-    const uint8_t* plane1 = pageBuffer;              // Bit1 plane
-    const uint8_t* plane2 = pageBuffer + planeSize;  // Bit2 plane
-    const size_t colBytes = (pageHeight + 7) / 8;    // Bytes per column (100 for 800 height)
+    const size_t colBytes = (pageHeight + 7) / 8;
+    const uint32_t pageDataOffset = pageInfo.offset + sizeof(xtc::XtgPageHeader);
 
-    // Lambda to get pixel value at (x, y)
-    auto getPixelValue = [&](uint16_t x, uint16_t y) -> uint8_t {
-      const size_t colIndex = pageWidth - 1 - x;
-      const size_t byteInCol = y / 8;
-      const size_t bitInByte = 7 - (y % 8);
-      const size_t byteOffset = colIndex * colBytes + byteInCol;
-      const uint8_t bit1 = (plane1[byteOffset] >> bitInByte) & 1;
-      const uint8_t bit2 = (plane2[byteOffset] >> bitInByte) & 1;
-      return (bit1 << 1) | bit2;
+    auto withPageFile = [&](size_t byteOffset, auto&& callback) -> bool {
+      FsFile pageFile;
+      if (!Storage.openFileForRead("XTR", xtc->getPath(), pageFile)) {
+        LOG_ERR("XTR", "Failed to open XTCH file for streaming: %s", xtc->getPath().c_str());
+        return false;
+      }
+      if (!pageFile.seek(pageDataOffset + byteOffset)) {
+        LOG_ERR("XTR", "Failed to seek XTCH page data to offset %lu", pageDataOffset + byteOffset);
+        pageFile.close();
+        return false;
+      }
+      const bool ok = callback(pageFile);
+      pageFile.close();
+      return ok;
     };
 
-    // Optimized grayscale rendering without storeBwBuffer (saves 48KB peak memory)
-    // Flow: BW display → LSB/MSB passes → grayscale display → re-render BW for next frame
-
-    // Count pixel distribution for debugging
-    uint32_t pixelCounts[4] = {0, 0, 0, 0};
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        pixelCounts[getPixelValue(x, y)]++;
-      }
-    }
-    LOG_DBG("XTR", "Pixel distribution: White=%lu, DarkGrey=%lu, LightGrey=%lu, Black=%lu", pixelCounts[0],
-            pixelCounts[1], pixelCounts[2], pixelCounts[3]);
-
-    // Pass 1: BW buffer - draw all non-white pixels as black
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        if (getPixelValue(x, y) >= 1) {
-          renderer.drawPixel(x, y, true);
+    auto forEachPlaneByte = [&](size_t planeStartOffset, auto&& visitByte) -> bool {
+      return withPageFile(planeStartOffset, [&](FsFile& pageFile) {
+        uint8_t chunk[1024];
+        size_t remaining = planeSize;
+        size_t planeOffset = 0;
+        while (remaining > 0) {
+          const size_t toRead = std::min(remaining, sizeof(chunk));
+          const size_t bytesRead = pageFile.read(chunk, toRead);
+          if (bytesRead != toRead) {
+            LOG_ERR("XTR", "Short read while streaming XTCH plane: expected %u got %u", toRead, bytesRead);
+            return false;
+          }
+          for (size_t i = 0; i < bytesRead; i++) {
+            visitByte(planeOffset + i, chunk[i]);
+          }
+          planeOffset += bytesRead;
+          remaining -= bytesRead;
         }
+        return true;
+      });
+    };
+
+    auto forEachPlanePairByte = [&](auto&& visitPair) -> bool {
+      FsFile plane1File;
+      FsFile plane2File;
+      if (!Storage.openFileForRead("XTR", xtc->getPath(), plane1File) ||
+          !Storage.openFileForRead("XTR", xtc->getPath(), plane2File)) {
+        LOG_ERR("XTR", "Failed to open XTCH planes for paired streaming: %s", xtc->getPath().c_str());
+        if (plane1File) plane1File.close();
+        if (plane2File) plane2File.close();
+        return false;
       }
+      if (!plane1File.seek(pageDataOffset) || !plane2File.seek(pageDataOffset + planeSize)) {
+        LOG_ERR("XTR", "Failed to seek XTCH paired planes");
+        plane1File.close();
+        plane2File.close();
+        return false;
+      }
+
+      uint8_t plane1Chunk[1024];
+      uint8_t plane2Chunk[1024];
+      size_t remaining = planeSize;
+      size_t planeOffset = 0;
+      while (remaining > 0) {
+        const size_t toRead = std::min(remaining, sizeof(plane1Chunk));
+        const size_t bytesRead1 = plane1File.read(plane1Chunk, toRead);
+        const size_t bytesRead2 = plane2File.read(plane2Chunk, toRead);
+        if (bytesRead1 != toRead || bytesRead2 != toRead) {
+          LOG_ERR("XTR", "Short read while streaming XTCH plane pair: %u/%u expected %u", bytesRead1, bytesRead2,
+                  toRead);
+          plane1File.close();
+          plane2File.close();
+          return false;
+        }
+        for (size_t i = 0; i < toRead; i++) {
+          visitPair(planeOffset + i, plane1Chunk[i], plane2Chunk[i]);
+        }
+        planeOffset += toRead;
+        remaining -= toRead;
+      }
+
+      plane1File.close();
+      plane2File.close();
+      return true;
+    };
+
+    auto visitPackedByte = [&](size_t planeOffset, uint8_t packed, auto&& onBit) {
+      const size_t colIndex = planeOffset / colBytes;
+      if (colIndex >= pageWidth) {
+        return;
+      }
+      const uint16_t srcX = pageWidth - 1 - static_cast<uint16_t>(colIndex);
+      const uint16_t yBase = static_cast<uint16_t>((planeOffset % colBytes) * 8);
+      for (uint8_t bit = 0; bit < 8; bit++) {
+        const uint16_t srcY = yBase + bit;
+        if (srcY >= maxSrcY) {
+          break;
+        }
+        const bool bitSet = ((packed >> (7 - bit)) & 0x01) != 0;
+        onBit(srcX, srcY, bitSet);
+      }
+    };
+
+    const bool bwOk =
+        forEachPlaneByte(0, [&](size_t planeOffset, uint8_t packed) {
+          visitPackedByte(planeOffset, packed, [this](uint16_t srcX, uint16_t srcY, bool bitSet) {
+            if (bitSet) {
+              renderer.drawPixel(srcX, srcY, true);
+            }
+          });
+        }) &&
+        forEachPlaneByte(planeSize, [&](size_t planeOffset, uint8_t packed) {
+          visitPackedByte(planeOffset, packed, [this](uint16_t srcX, uint16_t srcY, bool bitSet) {
+            if (bitSet) {
+              renderer.drawPixel(srcX, srcY, true);
+            }
+          });
+        });
+
+    if (!bwOk) {
+      renderer.clearScreen();
+      renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+      renderer.displayBuffer();
+      return;
     }
 
     // Display BW with conditional refresh based on pagesUntilFullRefresh
@@ -240,73 +311,139 @@ void XtcReaderActivity::renderPage() {
       pagesUntilFullRefresh--;
     }
 
-    // Pass 2: LSB buffer - mark DARK gray only (XTH value 1)
-    // In LUT: 0 bit = apply gray effect, 1 bit = untouched
+    // Pass 2: LSB buffer - mark DARK gray only (XTH value 1 => bit1=0, bit2=1)
     renderer.clearScreen(0x00);
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        if (getPixelValue(x, y) == 1) {  // Dark grey only
-          renderer.drawPixel(x, y, false);
+    const bool lsbOk = forEachPlanePairByte([&](size_t planeOffset, uint8_t packed1, uint8_t packed2) {
+      const size_t colIndex = planeOffset / colBytes;
+      if (colIndex >= pageWidth) {
+        return;
+      }
+      const uint16_t srcX = pageWidth - 1 - static_cast<uint16_t>(colIndex);
+      const uint16_t yBase = static_cast<uint16_t>((planeOffset % colBytes) * 8);
+      for (uint8_t bit = 0; bit < 8; bit++) {
+        const uint16_t srcY = yBase + bit;
+        if (srcY >= maxSrcY) {
+          break;
+        }
+        const bool bit1 = ((packed1 >> (7 - bit)) & 0x01) != 0;
+        const bool bit2 = ((packed2 >> (7 - bit)) & 0x01) != 0;
+        if (!bit1 && bit2) {
+          renderer.drawPixel(srcX, srcY, false);
         }
       }
+    });
+    if (!lsbOk) {
+      renderer.clearScreen();
+      renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+      renderer.displayBuffer();
+      return;
     }
     renderer.copyGrayscaleLsbBuffers();
 
-    // Pass 3: MSB buffer - mark LIGHT AND DARK gray (XTH value 1 or 2)
-    // In LUT: 0 bit = apply gray effect, 1 bit = untouched
+    // Pass 3: MSB buffer - mark LIGHT AND DARK gray (XTH value 1 or 2 => bit1 XOR bit2)
     renderer.clearScreen(0x00);
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        const uint8_t pv = getPixelValue(x, y);
-        if (pv == 1 || pv == 2) {  // Dark grey or Light grey
-          renderer.drawPixel(x, y, false);
+    const bool msbOk = forEachPlanePairByte([&](size_t planeOffset, uint8_t packed1, uint8_t packed2) {
+      const size_t colIndex = planeOffset / colBytes;
+      if (colIndex >= pageWidth) {
+        return;
+      }
+      const uint16_t srcX = pageWidth - 1 - static_cast<uint16_t>(colIndex);
+      const uint16_t yBase = static_cast<uint16_t>((planeOffset % colBytes) * 8);
+      for (uint8_t bit = 0; bit < 8; bit++) {
+        const uint16_t srcY = yBase + bit;
+        if (srcY >= maxSrcY) {
+          break;
+        }
+        const bool bit1 = ((packed1 >> (7 - bit)) & 0x01) != 0;
+        const bool bit2 = ((packed2 >> (7 - bit)) & 0x01) != 0;
+        if (bit1 != bit2) {
+          renderer.drawPixel(srcX, srcY, false);
         }
       }
+    });
+    if (!msbOk) {
+      renderer.clearScreen();
+      renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+      renderer.displayBuffer();
+      return;
     }
     renderer.copyGrayscaleMsbBuffers();
 
     // Display grayscale overlay
     renderer.displayGrayBuffer();
 
-    // Pass 4: Re-render BW to framebuffer (restore for next frame, instead of restoreBwBuffer)
+    // Pass 4: Re-render BW to framebuffer for the next frame
     renderer.clearScreen();
-    for (uint16_t y = 0; y < pageHeight; y++) {
-      for (uint16_t x = 0; x < pageWidth; x++) {
-        if (getPixelValue(x, y) >= 1) {
-          renderer.drawPixel(x, y, true);
-        }
-      }
+    const bool restoreBwOk =
+        forEachPlaneByte(0, [&](size_t planeOffset, uint8_t packed) {
+          visitPackedByte(planeOffset, packed, [this](uint16_t srcX, uint16_t srcY, bool bitSet) {
+            if (bitSet) {
+              renderer.drawPixel(srcX, srcY, true);
+            }
+          });
+        }) &&
+        forEachPlaneByte(planeSize, [&](size_t planeOffset, uint8_t packed) {
+          visitPackedByte(planeOffset, packed, [this](uint16_t srcX, uint16_t srcY, bool bitSet) {
+            if (bitSet) {
+              renderer.drawPixel(srcX, srcY, true);
+            }
+          });
+        });
+
+    if (!restoreBwOk) {
+      renderer.clearScreen();
+      renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+      renderer.displayBuffer();
+      return;
     }
 
-    // Cleanup grayscale buffers with current frame buffer
     renderer.cleanupGrayscaleWithFrameBuffer();
 
-    free(pageBuffer);
-
-    LOG_DBG("XTR", "Rendered page %lu/%lu (2-bit grayscale)", currentPage + 1, xtc->getPageCount());
+    LOG_DBG("XTR", "Rendered page %lu/%lu (2-bit grayscale streaming)", currentPage + 1, xtc->getPageCount());
     return;
   } else {
-    // 1-bit mode: 8 pixels per byte, MSB first
+    // 1-bit XTC pages are row-major and can be rendered directly from the SD stream.
+    // This avoids a full-page heap allocation (~48KB for 480x800), which is what
+    // caused memory errors for larger books with many pages.
     const size_t srcRowBytes = (pageWidth + 7) / 8;  // 60 bytes for 480 width
+    const xtc::XtcError streamErr = xtc->loadPageStreaming(
+        currentPage,
+        [this, srcRowBytes, pageWidth, maxSrcY](const uint8_t* data, size_t size, size_t offset) {
+          for (size_t i = 0; i < size; i++) {
+            const size_t globalByte = offset + i;
+            const uint16_t srcY = globalByte / srcRowBytes;
+            if (srcY >= maxSrcY) {
+              break;
+            }
 
-    for (uint16_t srcY = 0; srcY < maxSrcY; srcY++) {
-      const size_t srcRowStart = srcY * srcRowBytes;
+            const uint16_t srcByteInRow = globalByte % srcRowBytes;
+            const uint16_t srcXBase = srcByteInRow * 8;
+            const uint8_t packed = data[i];
 
-      for (uint16_t srcX = 0; srcX < pageWidth; srcX++) {
-        // Read source pixel (MSB first, bit 7 = leftmost pixel)
-        const size_t srcByte = srcRowStart + srcX / 8;
-        const size_t srcBit = 7 - (srcX % 8);
-        const bool isBlack = !((pageBuffer[srcByte] >> srcBit) & 1);  // XTC: 0 = black, 1 = white
+            for (uint8_t bit = 0; bit < 8; bit++) {
+              const uint16_t srcX = srcXBase + bit;
+              if (srcX >= pageWidth) {
+                break;
+              }
 
-        if (isBlack) {
-          renderer.drawPixel(srcX, srcY, true);
-        }
-      }
+              const bool isBlack = ((packed >> (7 - bit)) & 0x01) == 0;  // XTC: 0 = black, 1 = white
+              if (isBlack) {
+                renderer.drawPixel(srcX, srcY, true);
+              }
+            }
+          }
+        },
+        1024);
+
+    if (streamErr != xtc::XtcError::OK) {
+      LOG_ERR("XTR", "Failed to stream page %lu (%s)", currentPage, xtc::errorToString(streamErr));
+      renderer.clearScreen();
+      renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+      renderer.displayBuffer();
+      return;
     }
   }
   // White pixels are already cleared by clearScreen()
-
-  free(pageBuffer);
 
   // XTC pages already have status bar pre-rendered, no need to add our own
 
@@ -325,12 +462,17 @@ void XtcReaderActivity::renderPage() {
 void XtcReaderActivity::saveProgress() const {
   FsFile f;
   if (Storage.openFileForWrite("XTR", xtc->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[4];
+    const uint32_t totalPages = xtc ? xtc->getPageCount() : 0;
+    uint8_t data[8];
     data[0] = currentPage & 0xFF;
     data[1] = (currentPage >> 8) & 0xFF;
     data[2] = (currentPage >> 16) & 0xFF;
     data[3] = (currentPage >> 24) & 0xFF;
-    f.write(data, 4);
+    data[4] = totalPages & 0xFF;
+    data[5] = (totalPages >> 8) & 0xFF;
+    data[6] = (totalPages >> 16) & 0xFF;
+    data[7] = (totalPages >> 24) & 0xFF;
+    f.write(data, sizeof(data));
     f.close();
   }
 }
@@ -338,9 +480,11 @@ void XtcReaderActivity::saveProgress() const {
 void XtcReaderActivity::loadProgress() {
   FsFile f;
   if (Storage.openFileForRead("XTR", xtc->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[4];
-    if (f.read(data, 4) == 4) {
-      currentPage = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+    uint8_t data[8] = {0};
+    const int read = f.read(data, sizeof(data));
+    if (read >= 4) {
+      currentPage = static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8) |
+                    (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
       LOG_DBG("XTR", "Loaded progress: page %lu", currentPage);
 
       // Validate page number

@@ -121,6 +121,12 @@ bool JsonSettingsIO::saveSettings(const CrossPointSettings& s, const char* path)
   doc["frontButtonLeft"] = s.frontButtonLeft;
   doc["frontButtonRight"] = s.frontButtonRight;
 
+  // Bluetooth bonded remote metadata is not represented in SettingsList, but it
+  // must survive reboot so the firmware can reconnect to the remembered device.
+  doc["bleBondedDeviceAddr"] = s.bleBondedDeviceAddr;
+  doc["bleBondedDeviceName"] = s.bleBondedDeviceName;
+  doc["bleBondedDeviceAddrType"] = s.bleBondedDeviceAddrType;
+
   String json;
   serializeJson(doc, json);
   return Storage.writeFile(path, json);
@@ -199,6 +205,16 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
   s.frontButtonRight =
       clamp(doc["frontButtonRight"] | (uint8_t)S::FRONT_HW_RIGHT, S::FRONT_BUTTON_HARDWARE_COUNT, S::FRONT_HW_RIGHT);
   CrossPointSettings::validateFrontButtonMapping(s);
+
+  const std::string bondedAddr = doc["bleBondedDeviceAddr"] | std::string(s.bleBondedDeviceAddr);
+  strncpy(s.bleBondedDeviceAddr, bondedAddr.c_str(), sizeof(s.bleBondedDeviceAddr) - 1);
+  s.bleBondedDeviceAddr[sizeof(s.bleBondedDeviceAddr) - 1] = '\0';
+
+  const std::string bondedName = doc["bleBondedDeviceName"] | std::string(s.bleBondedDeviceName);
+  strncpy(s.bleBondedDeviceName, bondedName.c_str(), sizeof(s.bleBondedDeviceName) - 1);
+  s.bleBondedDeviceName[sizeof(s.bleBondedDeviceName) - 1] = '\0';
+
+  s.bleBondedDeviceAddrType = doc["bleBondedDeviceAddrType"] | s.bleBondedDeviceAddrType;
 
   LOG_DBG("CPS", "Settings loaded from file");
 

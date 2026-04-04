@@ -27,6 +27,17 @@ constexpr char SETTINGS_FILE_BIN[] = "/.crosspoint/settings.bin";
 constexpr char SETTINGS_FILE_JSON[] = "/.crosspoint/settings.json";
 constexpr char SETTINGS_FILE_BAK[] = "/.crosspoint/settings.bin.bak";
 
+bool sanitizeExperimentalSettings(CrossPointSettings& settings) {
+  const auto sanitizedTheme =
+      CrossPointSettings::sanitizeUiTheme(static_cast<CrossPointSettings::UI_THEME>(settings.uiTheme));
+  const uint8_t sanitizedThemeValue = static_cast<uint8_t>(sanitizedTheme);
+  if (settings.uiTheme != sanitizedThemeValue) {
+    settings.uiTheme = sanitizedThemeValue;
+    return true;
+  }
+  return false;
+}
+
 // Convert legacy front button layout into explicit logical->hardware mapping.
 void applyLegacyFrontButtonLayout(CrossPointSettings& settings) {
   switch (static_cast<CrossPointSettings::FRONT_BUTTON_LAYOUT>(settings.frontButtonLayout)) {
@@ -88,6 +99,9 @@ bool CrossPointSettings::loadFromFile() {
     if (!json.isEmpty()) {
       bool resave = false;
       bool result = JsonSettingsIO::loadSettings(*this, json.c_str(), &resave);
+      if (result && sanitizeExperimentalSettings(*this)) {
+        resave = true;
+      }
       if (result && resave) {
         if (saveToFile()) {
           LOG_DBG("CPS", "Resaved settings to update format");
@@ -212,6 +226,24 @@ bool CrossPointSettings::loadFromBinaryFile() {
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPod(inputFile, embeddedStyle);
     if (++settingsRead >= fileSettingsCount) break;
+    serialization::readPod(inputFile, bluetoothEnabled);
+    if (++settingsRead >= fileSettingsCount) break;
+    {
+      std::string addrStr;
+      serialization::readString(inputFile, addrStr);
+      strncpy(bleBondedDeviceAddr, addrStr.c_str(), sizeof(bleBondedDeviceAddr) - 1);
+      bleBondedDeviceAddr[sizeof(bleBondedDeviceAddr) - 1] = '\0';
+    }
+    if (++settingsRead >= fileSettingsCount) break;
+    {
+      std::string nameStr;
+      serialization::readString(inputFile, nameStr);
+      strncpy(bleBondedDeviceName, nameStr.c_str(), sizeof(bleBondedDeviceName) - 1);
+      bleBondedDeviceName[sizeof(bleBondedDeviceName) - 1] = '\0';
+    }
+    if (++settingsRead >= fileSettingsCount) break;
+    serialization::readPod(inputFile, bleBondedDeviceAddrType);
+    if (++settingsRead >= fileSettingsCount) break;
   } while (false);
 
   if (frontButtonMappingRead) {
@@ -219,6 +251,8 @@ bool CrossPointSettings::loadFromBinaryFile() {
   } else {
     applyLegacyFrontButtonLayout(*this);
   }
+
+  sanitizeExperimentalSettings(*this);
 
   inputFile.close();
   LOG_DBG("CPS", "Settings loaded from binary file");

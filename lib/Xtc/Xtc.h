@@ -73,6 +73,7 @@ class Xtc {
   uint16_t getPageWidth() const;
   uint16_t getPageHeight() const;
   uint8_t getBitDepth() const;  // 1 = XTC (1-bit), 2 = XTCH (2-bit)
+  bool getPageInfo(uint32_t pageIndex, xtc::PageInfo& info) const;
 
   /**
    * Load page bitmap data

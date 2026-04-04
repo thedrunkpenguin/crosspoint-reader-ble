@@ -1,5 +1,6 @@
 #pragma once
 
+#include <BluetoothHIDManager.h>
 #include <CrossPointSettings.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
@@ -34,8 +35,16 @@ struct PageTurnResult {
   bool next;
 };
 
+inline bool allowLongPressChapterSkip() {
+  // BLE page-turn remotes can report delayed or synthetic release frames, which
+  // makes release-driven page turns look ghostier than local buttons. Treat
+  // recent BLE input as page-turn-only and keep chapter-skip semantics for the
+  // local hardware buttons.
+  return SETTINGS.longPressChapterSkip && !BluetoothHIDManager::getInstance().hadRecentFree2Input();
+}
+
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
-  const bool usePress = !SETTINGS.longPressChapterSkip;
+  const bool usePress = !allowLongPressChapterSkip();
   const bool prev = usePress ? (input.wasPressed(MappedInputManager::Button::PageBack) ||
                                 input.wasPressed(MappedInputManager::Button::Left))
                              : (input.wasReleased(MappedInputManager::Button::PageBack) ||

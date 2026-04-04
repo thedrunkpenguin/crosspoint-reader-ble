@@ -79,10 +79,12 @@ class ActivityManager {
   // goTo... functions are convenient wrapper for replaceActivity()
   void goToFileTransfer();
   void goToSettings();
+  void goToBluetoothSettings(bool exitOnSuccessfulConnect = false);
   void goToFileBrowser(std::string path = {});
   void goToRecentBooks();
   void goToBrowser();
   void goToReader(std::string path);
+  void goToGame();
   void goToSleep();
   void goToBoot();
   void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR);

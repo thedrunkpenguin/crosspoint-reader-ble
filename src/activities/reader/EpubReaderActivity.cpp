@@ -98,6 +98,7 @@ void EpubReaderActivity::onExit() {
 
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
+  chapterSkipConsumedForHold = false;
   section.reset();
   epub.reset();
 }
@@ -135,6 +136,17 @@ void EpubReaderActivity::loop() {
     }
   }
 
+  if (skipNextButtonCheck) {
+    const bool confirmCleared = !mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
+                                !mappedInput.wasReleased(MappedInputManager::Button::Confirm);
+    const bool backCleared = !mappedInput.isPressed(MappedInputManager::Button::Back) &&
+                             !mappedInput.wasReleased(MappedInputManager::Button::Back);
+    if (confirmCleared && backCleared) {
+      skipNextButtonCheck = false;
+    }
+    return;
+  }
+
   // Enter reader menu activity.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     const int currentPage = section ? section->currentPage + 1 : 0;
@@ -149,6 +161,12 @@ void EpubReaderActivity::loop() {
                                renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
                                SETTINGS.orientation, !currentPageFootnotes.empty()),
                            [this](const ActivityResult& result) {
+                             skipNextButtonCheck = true;
+                             // The display currently contains the reader menu (or Bluetooth screen),
+                             // not the book page. Force one stronger refresh when returning so the
+                             // next book render re-establishes a clean differential baseline.
+                             pagesUntilFullRefresh = 1;
+
                              // Always apply orientation change even if the menu was cancelled
                              const auto& menu = std::get<MenuResult>(result.data);
                              applyOrientation(menu.orientation);
@@ -159,15 +177,16 @@ void EpubReaderActivity::loop() {
                            });
   }
 
+  const unsigned long backHeldMs = mappedInput.getHeldTime(MappedInputManager::Button::Back);
+
   // Long press BACK (1s+) goes to file selection
-  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
+  if (mappedInput.isPressed(MappedInputManager::Button::Back) && backHeldMs >= ReaderUtils::GO_HOME_MS) {
     activityManager.goToFileBrowser(epub ? epub->getPath() : "");
     return;
   }
 
   // Short press BACK goes directly to home (or restores position if viewing footnote)
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) &&
-      mappedInput.getHeldTime() < ReaderUtils::GO_HOME_MS) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && backHeldMs < ReaderUtils::GO_HOME_MS) {
     if (footnoteDepth > 0) {
       restoreSavedPosition();
       return;
@@ -176,10 +195,24 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  const bool allowLongPressChapterSkip = ReaderUtils::allowLongPressChapterSkip();
   auto [prevTriggered, nextTriggered] = ReaderUtils::detectPageTurn(mappedInput);
-  if (!prevTriggered && !nextTriggered) {
+  const bool prevHeldNow = mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
+                           mappedInput.isPressed(MappedInputManager::Button::Left);
+  const bool nextHeldNow = mappedInput.isPressed(MappedInputManager::Button::PageForward) ||
+                           mappedInput.isPressed(MappedInputManager::Button::Right);
+
+  if (chapterSkipConsumedForHold) {
+    if (!prevHeldNow && !nextHeldNow && !prevTriggered && !nextTriggered) {
+      chapterSkipConsumedForHold = false;
+    }
     return;
   }
+
+  const unsigned long prevHeldMs = std::max(mappedInput.getHeldTime(MappedInputManager::Button::PageBack),
+                                            mappedInput.getHeldTime(MappedInputManager::Button::Left));
+  const unsigned long nextHeldMs = std::max(mappedInput.getHeldTime(MappedInputManager::Button::PageForward),
+                                            mappedInput.getHeldTime(MappedInputManager::Button::Right));
 
   // any botton press when at end of the book goes back to the last page
   if (currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
@@ -189,7 +222,30 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  const bool skipChapter = SETTINGS.longPressChapterSkip && mappedInput.getHeldTime() > skipChapterMs;
+  const bool skipChapterFromHold =
+      allowLongPressChapterSkip && ((prevHeldNow && prevHeldMs > skipChapterMs) ||
+                                    (nextHeldNow && nextHeldMs > skipChapterMs));
+
+  if (skipChapterFromHold) {
+    chapterSkipConsumedForHold = true;
+    lastPageTurnTime = millis();
+    // We don't want to delete the section mid-render, so grab the semaphore
+    {
+      RenderLock lock(*this);
+      nextPageNumber = 0;
+      currentSpineIndex = nextHeldNow ? currentSpineIndex + 1 : currentSpineIndex - 1;
+      section.reset();
+    }
+    requestUpdate();
+    return;
+  }
+
+  if (!prevTriggered && !nextTriggered) {
+    return;
+  }
+
+  const bool skipChapter =
+      allowLongPressChapterSkip && ((prevTriggered ? prevHeldMs : nextHeldMs) > skipChapterMs);
 
   if (skipChapter) {
     lastPageTurnTime = millis();
@@ -355,6 +411,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     case EpubReaderMenuActivity::MenuAction::GO_HOME: {
       onGoHome();
       return;
+    }
+    case EpubReaderMenuActivity::MenuAction::BLUETOOTH: {
+      activityManager.goToBluetoothSettings(true);
+      break;
     }
     case EpubReaderMenuActivity::MenuAction::DELETE_CACHE: {
       {

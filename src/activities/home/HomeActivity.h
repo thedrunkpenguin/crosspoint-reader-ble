@@ -25,6 +25,7 @@ class HomeActivity final : public Activity {
   void onRecentsOpen();
   void onSettingsOpen();
   void onFileTransferOpen();
+  void onGameOpen();
   void onOpdsBrowserOpen();
 
   int getMenuItemCount() const;
@@ -33,6 +34,7 @@ class HomeActivity final : public Activity {
   void freeCoverBuffer();     // Free the stored cover buffer
   void loadRecentBooks(int maxBooks);
   void loadRecentCovers(int coverHeight);
+  int getRecentBookProgressPercent(const RecentBook& book) const;
 
  public:
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

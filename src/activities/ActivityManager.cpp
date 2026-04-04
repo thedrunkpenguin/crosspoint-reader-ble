@@ -10,7 +10,11 @@
 #include "home/RecentBooksActivity.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "reader/ReaderActivity.h"
+#include "settings/BluetoothSettingsActivity.h"
 #include "settings/SettingsActivity.h"
+#include "CrossPointSettings.h"
+#include "game/GameActivity.h"
+#include "game/GameTitleActivity.h"
 #include "util/FullScreenMessageActivity.h"
 
 void ActivityManager::begin() {
@@ -169,6 +173,12 @@ void ActivityManager::goToFileTransfer() {
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
 
+void ActivityManager::goToBluetoothSettings(bool exitOnSuccessfulConnect) {
+  pushActivity(std::make_unique<BluetoothSettingsActivity>(renderer, mappedInput,
+                                                           [] { activityManager.popActivity(); },
+                                                           exitOnSuccessfulConnect));
+}
+
 void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
 }
@@ -183,6 +193,21 @@ void ActivityManager::goToBrowser() {
 
 void ActivityManager::goToReader(std::string path) {
   replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path)));
+}
+
+void ActivityManager::goToGame() {
+  if constexpr (!CrossPointSettings::deepMinesEnabled) {
+    LOG_DBG("ACT", "Deep Mines is disabled in this build");
+    goHome();
+    return;
+  }
+
+  replaceActivity(std::make_unique<GameTitleActivity>(
+      renderer, mappedInput,
+      [this]() {
+        replaceActivity(std::make_unique<GameActivity>(renderer, mappedInput, [] { activityManager.goHome(); }));
+      },
+      [this]() { goHome(); }));
 }
 
 void ActivityManager::goToSleep() {

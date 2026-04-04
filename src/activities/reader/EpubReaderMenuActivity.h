@@ -20,6 +20,7 @@ class EpubReaderMenuActivity final : public Activity {
     SCREENSHOT,
     DISPLAY_QR,
     GO_HOME,
+    BLUETOOTH,
     SYNC,
     DELETE_CACHE
   };

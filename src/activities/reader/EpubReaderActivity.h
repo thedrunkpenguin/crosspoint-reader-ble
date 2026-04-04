@@ -25,7 +25,8 @@ class EpubReaderActivity final : public Activity {
   // Normalized 0.0-1.0 progress within the target spine item, computed from book percentage.
   float pendingSpineProgress = 0.0f;
   bool pendingScreenshot = false;
-  bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
+  bool skipNextButtonCheck = false;  // Skip button processing after returning from modal UI
+  bool chapterSkipConsumedForHold = false;
   bool automaticPageTurnActive = false;
 
   // Footnote support

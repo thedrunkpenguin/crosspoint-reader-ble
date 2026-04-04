@@ -22,6 +22,12 @@ class HalGPIO {
 #if CROSSPOINT_EMULATED == 0
   InputManager inputMgr;
 #endif
+  uint8_t virtualButtonState = 0;          // Current virtual button state
+  uint8_t desiredVirtualButtonState = 0;   // State requested by async injectors
+  uint8_t previousVirtualButtonState = 0;  // Previous frame virtual state
+  unsigned long virtualPressStart[7] = {0};
+  unsigned long virtualPressFinish[7] = {0};
+  unsigned long virtualLastActivityTime[7] = {0};
 
   bool lastUsbConnected = false;
   bool usbStateChanged = false;
@@ -40,6 +46,13 @@ class HalGPIO {
   bool wasReleased(uint8_t buttonIndex) const;
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;
+  unsigned long getHeldTime(uint8_t buttonIndex) const;
+
+  // Virtual button injection (for Bluetooth HID)
+  void setVirtualButtonState(uint8_t buttonIndex, bool pressed);
+  void injectButtonPress(uint8_t buttonIndex);
+  void clearVirtualButtons();
+  void updateVirtualButtonActivity(uint8_t buttonIndex);
 
   // Check if USB is connected
   bool isUsbConnected() const;

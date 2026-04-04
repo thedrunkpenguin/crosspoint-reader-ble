@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <BluetoothHIDManager.h>
 #include <Epub.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
@@ -34,6 +35,7 @@ GfxRenderer renderer(display);
 ActivityManager activityManager(renderer, mappedInputManager);
 FontDecompressor fontDecompressor;
 FontCacheManager fontCacheManager(renderer.getFontMap());
+static volatile bool gBluetoothReaderContext = false;
 
 // Fonts
 EpdFont bookerly14RegularFont(&bookerly_14_regular);
@@ -186,6 +188,12 @@ void enterDeepSleep() {
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
   APP_STATE.saveToFile();
 
+  auto& btMgr = BluetoothHIDManager::getInstance();
+  if (btMgr.isEnabled()) {
+    LOG_INF("SLP", "Disabling Bluetooth before deep sleep");
+    btMgr.disable();
+  }
+
   activityManager.goToSleep();
 
   display.deepSleep();
@@ -263,6 +271,13 @@ void setup() {
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
 
+  auto& btMgr = BluetoothHIDManager::getInstance();
+  btMgr.setButtonInjector([](uint8_t buttonIndex, bool pressed) { gpio.setVirtualButtonState(buttonIndex, pressed); });
+  btMgr.setButtonActivityNotifier([](uint8_t buttonIndex) { gpio.updateVirtualButtonActivity(buttonIndex); });
+  btMgr.setReaderContextCallback([]() { return gBluetoothReaderContext; });
+  btMgr.setBondedDevice(SETTINGS.bleBondedDeviceAddr, SETTINGS.bleBondedDeviceName);
+  LOG_INF("MAIN", "Bluetooth HID initialized with button injection");
+
   switch (gpio.getWakeupReason()) {
     case HalGPIO::WakeupReason::PowerButton:
       // For normal wakeups, verify power button press duration
@@ -315,6 +330,16 @@ void loop() {
   static unsigned long lastMemPrint = 0;
 
   gpio.update();
+  const bool userInputDetected = gpio.wasAnyPressed() || gpio.wasAnyReleased();
+  bool bleRecentActivity = false;
+  bool bleEnabled = false;
+
+  gBluetoothReaderContext = activityManager.isReaderActivity();
+  auto& btMgr = BluetoothHIDManager::getInstance();
+  bleEnabled = btMgr.isEnabled();
+  btMgr.updateActivity();
+  btMgr.checkAutoReconnect(userInputDetected);
+  bleRecentActivity = btMgr.hasRecentActivity();
 
   renderer.setFadingFix(SETTINGS.fadingFix);
 
@@ -342,7 +367,7 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || activityManager.preventAutoSleep()) {
+  if (userInputDetected || activityManager.preventAutoSleep() || bleRecentActivity) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }

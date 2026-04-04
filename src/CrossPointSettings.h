@@ -132,7 +132,23 @@ class CrossPointSettings {
   enum HIDE_BATTERY_PERCENTAGE { HIDE_NEVER = 0, HIDE_READER = 1, HIDE_ALWAYS = 2, HIDE_BATTERY_PERCENTAGE_COUNT };
 
   // UI Theme
-  enum UI_THEME { CLASSIC = 0, LYRA = 1, LYRA_3_COVERS = 2 };
+  enum UI_THEME { CLASSIC = 0, LYRA = 1, LYRA_3_COVERS = 2, CARDS = 3 };
+
+#if defined(ENABLE_EXPERIMENTAL_CARDS_THEME)
+  static constexpr bool cardsThemeEnabled = true;
+#else
+  static constexpr bool cardsThemeEnabled = false;
+#endif
+
+#if defined(ENABLE_EXPERIMENTAL_DEEP_MINES)
+  static constexpr bool deepMinesEnabled = true;
+#else
+  static constexpr bool deepMinesEnabled = false;
+#endif
+
+  static constexpr UI_THEME sanitizeUiTheme(UI_THEME theme) {
+    return (!cardsThemeEnabled && theme == CARDS) ? LYRA : theme;
+  }
 
   // Image rendering in EPUB reader
   enum IMAGE_RENDERING { IMAGES_DISPLAY = 0, IMAGES_PLACEHOLDER = 1, IMAGES_SUPPRESS = 2, IMAGE_RENDERING_COUNT };
@@ -197,6 +213,12 @@ class CrossPointSettings {
   uint8_t embeddedStyle = 1;
   // Show hidden files/directories (starting with '.') in the file browser (0 = hidden, 1 = show)
   uint8_t showHiddenFiles = 0;
+  // Bluetooth enabled state (persistent)
+  uint8_t bluetoothEnabled = 0;
+  // BLE bonded remote settings
+  char bleBondedDeviceAddr[18] = "";
+  char bleBondedDeviceName[32] = "";
+  uint8_t bleBondedDeviceAddrType = 0;
   // Image rendering mode in EPUB reader
   uint8_t imageRendering = IMAGES_DISPLAY;
 
