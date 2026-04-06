@@ -1,5 +1,7 @@
 #include "EpubReaderActivity.h"
 
+#include <array>
+
 #include <Epub/Page.h>
 #include <Epub/blocks/TextBlock.h>
 #include <FontCacheManager.h>
@@ -28,8 +30,16 @@
 namespace {
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
 constexpr unsigned long skipChapterMs = 700;
-// pages per minute, first item is 1 to prevent division by zero if accessed
-const std::vector<int> PAGE_TURN_LABELS = {1, 1, 3, 6, 12};
+// Pages per minute, multiplied by 2 so we can support 0.5 increments without floats.
+constexpr std::array<uint8_t, 10> PAGE_TURN_RATES_X2 = {0, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+
+std::string formatPageTurnRateLabel(uint8_t rateX2) {
+  std::string label = std::to_string(rateX2 / 2);
+  if ((rateX2 % 2) != 0) {
+    label += ".5";
+  }
+  return label;
+}
 
 int clampPercent(int percent) {
   if (percent < 0) {
@@ -492,14 +502,20 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
 }
 
 void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption) {
-  if (selectedPageTurnOption == 0 || selectedPageTurnOption >= PAGE_TURN_LABELS.size()) {
+  if (selectedPageTurnOption == 0 || selectedPageTurnOption >= PAGE_TURN_RATES_X2.size()) {
+    automaticPageTurnActive = false;
+    return;
+  }
+
+  const uint8_t rateX2 = PAGE_TURN_RATES_X2[selectedPageTurnOption];
+  if (rateX2 == 0) {
     automaticPageTurnActive = false;
     return;
   }
 
   lastPageTurnTime = millis();
-  // calculates page turn duration by dividing by number of pages
-  pageTurnDuration = (1UL * 60 * 1000) / PAGE_TURN_LABELS[selectedPageTurnOption];
+  // milliseconds per page, using half-page resolution without floating point math
+  pageTurnDuration = (2UL * 60 * 1000) / rateX2;
   automaticPageTurnActive = true;
 
   const uint8_t statusBarHeight = UITheme::getInstance().getStatusBarHeight();
@@ -865,7 +881,8 @@ void EpubReaderActivity::renderStatusBar() const {
   int textYOffset = 0;
 
   if (automaticPageTurnActive) {
-    title = tr(STR_AUTO_TURN_ENABLED) + std::to_string(60 * 1000 / pageTurnDuration);
+    const uint8_t activeRateX2 = static_cast<uint8_t>(((2UL * 60 * 1000) + (pageTurnDuration / 2)) / pageTurnDuration);
+    title = tr(STR_AUTO_TURN_ENABLED) + formatPageTurnRateLabel(activeRateX2);
 
     // calculates textYOffset when rendering title in status bar
     const uint8_t statusBarHeight = UITheme::getInstance().getStatusBarHeight();
