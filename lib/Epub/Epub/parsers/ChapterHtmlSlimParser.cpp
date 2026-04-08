@@ -1,5 +1,7 @@
 #include "ChapterHtmlSlimParser.h"
 
+#include <array>
+
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -19,6 +21,53 @@ constexpr int NUM_HEADER_TAGS = sizeof(HEADER_TAGS) / sizeof(HEADER_TAGS[0]);
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
 constexpr size_t PARSE_BUFFER_SIZE = 1024;
+constexpr std::array<size_t, 3> IMAGE_STREAM_CHUNK_SIZES = {1024, 768, 512};
+
+bool extractImageToCacheWithRetries(const Epub& epub, const std::string& resolvedPath,
+                                    const std::string& cachedImagePath) {
+  for (size_t attempt = 0; attempt < IMAGE_STREAM_CHUNK_SIZES.size(); ++attempt) {
+    if (Storage.exists(cachedImagePath.c_str())) {
+      Storage.remove(cachedImagePath.c_str());
+    }
+
+    FsFile cachedImageFile;
+    if (!Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
+      LOG_ERR("EHP", "Failed to open cached image for write: %s", cachedImagePath.c_str());
+      delay(20 * (attempt + 1));
+      continue;
+    }
+
+    const size_t chunkSize = IMAGE_STREAM_CHUNK_SIZES[attempt];
+    const bool extractSuccess = epub.readItemContentsToStream(resolvedPath, cachedImageFile, chunkSize);
+    cachedImageFile.flush();
+    cachedImageFile.close();
+
+    if (extractSuccess) {
+      delay(20);  // Give the SD card time to sync before probing dimensions.
+      return true;
+    }
+
+    LOG_ERR("EHP", "Image extract attempt %u failed for %s (chunk=%u)", static_cast<unsigned>(attempt + 1),
+            resolvedPath.c_str(), static_cast<unsigned>(chunkSize));
+    delay(20 * (attempt + 1));
+  }
+
+  if (Storage.exists(cachedImagePath.c_str())) {
+    Storage.remove(cachedImagePath.c_str());
+  }
+  return false;
+}
+
+bool getImageDimensionsWithRetries(ImageToFramebufferDecoder& decoder, const std::string& cachedImagePath,
+                                   ImageDimensions& dims) {
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    if (decoder.getDimensions(cachedImagePath, dims)) {
+      return true;
+    }
+    delay(20 * (attempt + 1));
+  }
+  return false;
+}
 
 const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote"};
 constexpr int NUM_BLOCK_TAGS = sizeof(BLOCK_TAGS) / sizeof(BLOCK_TAGS[0]);
@@ -311,21 +360,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
             }
             std::string cachedImagePath = self->imageBasePath + std::to_string(self->imageCounter++) + ext;
 
-            // Extract image to cache file
-            FsFile cachedImageFile;
-            bool extractSuccess = false;
-            if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
-              extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
-              cachedImageFile.flush();
-              cachedImageFile.close();
-              delay(50);  // Give SD card time to sync
-            }
+            const bool extractSuccess =
+                extractImageToCacheWithRetries(*self->epub, resolvedPath, cachedImagePath);
 
             if (extractSuccess) {
               // Get image dimensions
               ImageDimensions dims = {0, 0};
               ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cachedImagePath);
-              if (decoder && decoder->getDimensions(cachedImagePath, dims)) {
+              if (decoder && getImageDimensionsWithRetries(*decoder, cachedImagePath, dims)) {
                 LOG_DBG("EHP", "Image dimensions: %dx%d", dims.width, dims.height);
 
                 int displayWidth = 0;
@@ -462,11 +504,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 self->depth += 1;
                 return;
               } else {
-                LOG_ERR("EHP", "Failed to get image dimensions");
+                self->hadSupportedImageFailure = true;
+                LOG_ERR("EHP", "Failed to get image dimensions after retries: %s", cachedImagePath.c_str());
                 Storage.remove(cachedImagePath.c_str());
               }
             } else {
-              LOG_ERR("EHP", "Failed to extract image");
+              self->hadSupportedImageFailure = true;
+              LOG_ERR("EHP", "Failed to extract image after retries: %s", resolvedPath.c_str());
             }
           }  // isFormatSupported
         }
