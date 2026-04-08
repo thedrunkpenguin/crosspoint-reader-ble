@@ -39,6 +39,10 @@ int HomeActivity::getMenuItemCount() const {
     return 2 + actionCount;  // preview card + recents card + action cards (no virtual pet in this build)
   }
 
+  // Non-cards themes expose Recents as an explicit menu item so the home screen
+  // actions stay functionally aligned with the Cards layout.
+  actionCount += 1;  // Recent Books
+
   const int coverSlots = std::max(1, UITheme::getInstance().getMetrics().homeRecentBooksCount);
   const int recentCount = std::max(1, std::min(static_cast<int>(recentBooks.size()), coverSlots));
   return recentCount + actionCount;
@@ -373,13 +377,16 @@ void HomeActivity::loop() {
 
       int idx = 0;
       const int menuSelectedIndex = selectorIndex - recentCount;
+      const int recentsIdx = idx++;
       const int fileBrowserIdx = idx++;
       const int opdsLibraryIdx = hasOpdsUrl ? idx++ : -1;
       const int fileTransferIdx = idx++;
       const int gameIdx = CrossPointSettings::deepMinesEnabled ? idx++ : -1;
       const int settingsIdx = idx;
 
-      if (menuSelectedIndex == fileBrowserIdx) {
+      if (menuSelectedIndex == recentsIdx) {
+        onRecentsOpen();
+      } else if (menuSelectedIndex == fileBrowserIdx) {
         onFileBrowserOpen();
       } else if (menuSelectedIndex == opdsLibraryIdx) {
         onOpdsBrowserOpen();
@@ -442,6 +449,11 @@ void HomeActivity::render(RenderLock&&) {
 
   std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_NETWORK), tr(STR_SETTINGS_TITLE)};
   std::vector<UIIcon> menuIcons = {Folder, Transfer, Settings};
+
+  if (!isCardsTheme) {
+    menuItems.insert(menuItems.begin(), tr(STR_MENU_RECENT_BOOKS));
+    menuIcons.insert(menuIcons.begin(), Recent);
+  }
 
   if (hasOpdsUrl) {
     menuItems.insert(menuItems.begin() + 1, tr(STR_OPDS_BROWSER));
