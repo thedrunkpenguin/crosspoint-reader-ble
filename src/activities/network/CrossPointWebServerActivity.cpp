@@ -13,6 +13,7 @@
 #include "NetworkModeSelectionActivity.h"
 #include "WifiSelectionActivity.h"
 #include "activities/network/CalibreConnectActivity.h"
+#include "activities/network/SubredditActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/QrUtils.h"
@@ -105,6 +106,8 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
     modeName = "Connect to Calibre";
   } else if (mode == NetworkMode::CREATE_HOTSPOT) {
     modeName = "Create Hotspot";
+  } else if (mode == NetworkMode::SUBREDDIT_READER) {
+    modeName = "Subreddit Reader";
   }
   LOG_DBG("WEBACT", "Network mode selected: %s", modeName);
 
@@ -125,6 +128,21 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
                                    }
                                  });
         });
+    return;
+  }
+
+  if (mode == NetworkMode::SUBREDDIT_READER) {
+    state = WebServerActivityState::MODE_SELECTION;
+    startActivityForResult(std::make_unique<SubredditActivity>(renderer, mappedInput), [this](const ActivityResult&) {
+      startActivityForResult(std::make_unique<NetworkModeSelectionActivity>(renderer, mappedInput),
+                             [this](const ActivityResult& result) {
+                               if (result.isCancelled) {
+                                 onGoHome();
+                               } else {
+                                 onNetworkModeSelected(std::get<NetworkModeResult>(result.data).mode);
+                               }
+                             });
+    });
     return;
   }
 

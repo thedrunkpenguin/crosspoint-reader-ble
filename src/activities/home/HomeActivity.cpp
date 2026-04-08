@@ -20,19 +20,23 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "components/icons/book.h"
+#include "components/icons/cog.h"
 #include "components/icons/folder.h"
+#include "components/icons/folder2.h"
+#include "components/icons/game.h"
 #include "components/icons/library.h"
 #include "components/icons/settings.h"
 #include "components/icons/transfer.h"
+#include "components/icons/wifi_wide.h"
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
-  int actionCount = hasOpdsUrl ? 5 : 4;  // Browse, Recents, OPDS?, Transfer, Settings
+  int actionCount = hasOpdsUrl ? 4 : 3;  // Browse, OPDS?, Network/File Transfer, Settings
   if constexpr (CrossPointSettings::deepMinesEnabled) {
     actionCount += 1;  // Games
   }
   if (SETTINGS.uiTheme == CrossPointSettings::UI_THEME::CARDS) {
-    return 2 + actionCount;  // preview card + recents card + actions
+    return 2 + actionCount;  // preview card + recents card + action cards (no virtual pet in this build)
   }
 
   const int coverSlots = std::max(1, UITheme::getInstance().getMetrics().homeRecentBooksCount);
@@ -66,8 +70,10 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   bool showingLoading = false;
   Rect popupRect;
 
+  const size_t booksToProcess = isCardsTheme ? std::min<size_t>(1, recentBooks.size()) : recentBooks.size();
   int progress = 0;
-  for (RecentBook& book : recentBooks) {
+  for (size_t bookIndex = 0; bookIndex < booksToProcess; ++bookIndex) {
+    RecentBook& book = recentBooks[bookIndex];
     const bool isEpub = FsHelpers::hasEpubExtension(book.path);
     const bool isXtc = FsHelpers::hasXtcExtension(book.path);
 
@@ -93,13 +99,11 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       if (Storage.openFileForRead("HOM", coverPath, coverFile)) {
         Bitmap bitmap(coverFile);
         if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-          const int minDesiredHeight = isCardsTheme ? std::max(180, coverHeight - 8)
-                                                    : std::max(120, (coverHeight * 3) / 4);
+          // Reuse existing cached thumbs in Cards mode too. Forcing a new grayscale
+          // render on every home entry makes the cover noticeably slower to appear.
+          const int minDesiredHeight = std::max(120, (coverHeight * 3) / 4);
           const int minDesiredWidth = std::max(80, (minDesiredHeight * 2) / 3);
           if (bitmap.getHeight() < minDesiredHeight || bitmap.getWidth() < minDesiredWidth) {
-            needsThumbGeneration = true;
-          }
-          if (isCardsTheme && isEpub && bitmap.getBpp() == 1) {
             needsThumbGeneration = true;
           }
         } else {
@@ -121,7 +125,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
         popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
       }
       GUI.fillPopupProgress(renderer, popupRect,
-                            10 + progress * (90 / std::max(1, static_cast<int>(recentBooks.size()))));
+                            10 + progress * (90 / std::max(1, static_cast<int>(booksToProcess))));
 
       if (isEpub) {
         Epub epub(book.path, "/.crosspoint");
@@ -164,7 +168,8 @@ void HomeActivity::onEnter() {
   selectorIndex = 0;
 
   const auto& metrics = UITheme::getInstance().getMetrics();
-  loadRecentBooks(metrics.homeRecentBooksCount);
+  const bool isCardsTheme = SETTINGS.uiTheme == CrossPointSettings::UI_THEME::CARDS;
+  loadRecentBooks(std::max(isCardsTheme ? 4 : 3, metrics.homeRecentBooksCount));
 
   // Trigger first update
   requestUpdate();
@@ -369,7 +374,6 @@ void HomeActivity::loop() {
       int idx = 0;
       const int menuSelectedIndex = selectorIndex - recentCount;
       const int fileBrowserIdx = idx++;
-      const int recentsIdx = idx++;
       const int opdsLibraryIdx = hasOpdsUrl ? idx++ : -1;
       const int fileTransferIdx = idx++;
       const int gameIdx = CrossPointSettings::deepMinesEnabled ? idx++ : -1;
@@ -377,8 +381,6 @@ void HomeActivity::loop() {
 
       if (menuSelectedIndex == fileBrowserIdx) {
         onFileBrowserOpen();
-      } else if (menuSelectedIndex == recentsIdx) {
-        onRecentsOpen();
       } else if (menuSelectedIndex == opdsLibraryIdx) {
         onOpdsBrowserOpen();
       } else if (menuSelectedIndex == fileTransferIdx) {
@@ -408,7 +410,6 @@ void HomeActivity::loop() {
     int idx = 0;
     const int menuSelectedIndex = selectorIndex - 2;
     const int fileBrowserIdx = idx++;
-    const int recentsIdx = idx++;
     const int opdsLibraryIdx = hasOpdsUrl ? idx++ : -1;
     const int fileTransferIdx = idx++;
     const int gameIdx = CrossPointSettings::deepMinesEnabled ? idx++ : -1;
@@ -416,8 +417,6 @@ void HomeActivity::loop() {
 
     if (menuSelectedIndex == fileBrowserIdx) {
       onFileBrowserOpen();
-    } else if (menuSelectedIndex == recentsIdx) {
-      onRecentsOpen();
     } else if (menuSelectedIndex == opdsLibraryIdx) {
       onOpdsBrowserOpen();
     } else if (menuSelectedIndex == fileTransferIdx) {
@@ -441,13 +440,12 @@ void HomeActivity::render(RenderLock&&) {
 
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, nullptr);
 
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
-                                        tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings};
+  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_NETWORK), tr(STR_SETTINGS_TITLE)};
+  std::vector<UIIcon> menuIcons = {Folder, Transfer, Settings};
 
   if (hasOpdsUrl) {
-    menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
-    menuIcons.insert(menuIcons.begin() + 2, Library);
+    menuItems.insert(menuItems.begin() + 1, tr(STR_OPDS_BROWSER));
+    menuIcons.insert(menuIcons.begin() + 1, Library);
   }
 
   if constexpr (CrossPointSettings::deepMinesEnabled) {
@@ -491,43 +489,85 @@ void HomeActivity::render(RenderLock&&) {
   const int contentWidth = pageWidth - metrics.contentSidePadding * 2;
   const int columnGap = metrics.menuSpacing * 2;
   const int cardWidth = (contentWidth - columnGap) / 2;
-  const int topY = metrics.homeTopPadding;
-  const int topCardHeight = std::max(190, std::min(260, (pageHeight - topY - metrics.buttonHintsHeight - 60) / 3));
 
+  constexpr int minTopCardHeight = 220;
+  constexpr int minLowerCardHeight = 90;
+  const int lowerCount = static_cast<int>(menuItems.size());
+  const int lowerRows = (lowerCount + 1) / 2;
+  const int maxTopCardHeight = pageHeight - metrics.homeTopPadding - metrics.buttonHintsHeight -
+                               metrics.verticalSpacing * 2 - (lowerRows - 1) * metrics.menuSpacing -
+                               lowerRows * minLowerCardHeight;
+  const int desiredTopCardHeight = (pageHeight * 46) / 100;
+  const int topCardHeight =
+      std::clamp(desiredTopCardHeight, minTopCardHeight, std::max(minTopCardHeight, maxTopCardHeight));
+  // Cards crops a wide slice from a portrait book cover, so using a somewhat taller
+  // cached thumb keeps the preview sharper without bringing back the old blocking load.
+  const int cardsPreviewCoverHeight = std::max(metrics.homeCoverHeight, std::min(400, topCardHeight * 2));
+
+  const int topY = metrics.homeTopPadding;
   const int previewX = contentX;
   const int recentX = contentX + cardWidth + columnGap;
   const bool previewSelected = selectorIndex == 0;
   const bool recentSelected = selectorIndex == 1;
 
-  renderer.fillRoundedRect(previewX, topY, cardWidth, topCardHeight, 8,
-                           previewSelected ? Color::LightGray : Color::White);
-  renderer.drawRoundedRect(previewX, topY, cardWidth, topCardHeight, 1, 8, true);
-  if (previewSelected) {
-    renderer.drawRoundedRect(previewX + 2, topY + 2, cardWidth - 4, topCardHeight - 4, 1, 7, true);
-  }
-
-  bool drewPreviewCover = false;
-  if (!recentBooks.empty() && !recentBooks[0].coverBmpPath.empty()) {
-    const std::string coverPath = UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, topCardHeight);
+  const int cachedCoverHeight = cardsPreviewCoverHeight;
+  bool drewPreviewCover = bufferRestored && coverBufferStored;
+  if (!drewPreviewCover && !recentBooks.empty() && !recentBooks[0].coverBmpPath.empty()) {
+    const std::string coverPath = UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, cachedCoverHeight);
     FsFile file;
     if (Storage.openFileForRead("HOM", coverPath, file)) {
       Bitmap bitmap(file);
       if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-        renderer.drawBitmap(bitmap, previewX + 8, topY + 8, cardWidth - 16, topCardHeight - 54);
+        float cropX = 0.0f;
+        float cropY = 0.0f;
+        const float bitmapRatio = static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
+        const float cardRatio = static_cast<float>(cardWidth) / static_cast<float>(topCardHeight);
+        if (bitmapRatio > cardRatio) {
+          cropX = 1.0f - (cardRatio / bitmapRatio);
+        } else if (bitmapRatio < cardRatio) {
+          cropY = 1.0f - (bitmapRatio / cardRatio);
+        }
+        renderer.drawBitmap(bitmap, previewX, topY, cardWidth, topCardHeight, cropX, cropY);
         drewPreviewCover = true;
+        recentsLoaded = true;  // cached cover is already good enough for Cards mode
       }
       file.close();
     }
   }
+
   if (!drewPreviewCover) {
-    renderer.drawIcon(BookIcon, previewX + (cardWidth - 32) / 2, topY + 36, 32, 32);
+    renderer.fillRect(previewX, topY, cardWidth, topCardHeight, false);
+    renderer.drawIcon(BookIcon, previewX + (cardWidth - 32) / 2, topY + (topCardHeight - 32) / 2, 32, 32);
   }
+
+  if (drewPreviewCover && !coverRendered) {
+    if (!coverBufferStored) {
+      coverBufferStored = storeCoverBuffer();
+    }
+    coverRendered = coverBufferStored;
+  }
+
+  const int overlayH = renderer.getLineHeight(UI_10_FONT_ID) + renderer.getLineHeight(UI_12_FONT_ID) + 14;
+  const int overlayY = topY + topCardHeight - overlayH - 8;
+  renderer.fillRect(previewX + 8, overlayY, cardWidth - 16, overlayH, false);
+  renderer.drawRect(previewX + 8, overlayY, cardWidth - 16, overlayH, true);
 
   const char* previewLabel = !recentBooks.empty() ? tr(STR_CONTINUE_READING) : tr(STR_BROWSE_FILES);
   std::string previewTitle = !recentBooks.empty() ? recentBooks[0].title : tr(STR_NO_OPEN_BOOK);
-  previewTitle = renderer.truncatedText(UI_10_FONT_ID, previewTitle.c_str(), cardWidth - 16, EpdFontFamily::BOLD);
-  renderer.drawText(UI_10_FONT_ID, previewX + 8, topY + topCardHeight - 30, previewLabel, true, EpdFontFamily::BOLD);
-  renderer.drawText(SMALL_FONT_ID, previewX + 8, topY + topCardHeight - 14, previewTitle.c_str(), true);
+  previewTitle = renderer.truncatedText(UI_12_FONT_ID, previewTitle.c_str(), cardWidth - 24, EpdFontFamily::BOLD);
+
+  const int previewLabelW = renderer.getTextWidth(UI_10_FONT_ID, previewLabel);
+  renderer.drawText(UI_10_FONT_ID, previewX + (cardWidth - previewLabelW) / 2, overlayY + 5, previewLabel, true);
+
+  const int previewTitleW = renderer.getTextWidth(UI_12_FONT_ID, previewTitle.c_str(), EpdFontFamily::BOLD);
+  renderer.drawText(UI_12_FONT_ID, previewX + (cardWidth - previewTitleW) / 2,
+                    overlayY + 5 + renderer.getLineHeight(UI_10_FONT_ID) + 2, previewTitle.c_str(), true,
+                    EpdFontFamily::BOLD);
+
+  renderer.drawRoundedRect(previewX, topY, cardWidth, topCardHeight, 1, 8, true);
+  if (previewSelected) {
+    renderer.drawRoundedRect(previewX + 2, topY + 2, cardWidth - 4, topCardHeight - 4, 1, 7, true);
+  }
 
   renderer.fillRoundedRect(recentX, topY, cardWidth, topCardHeight, 8,
                            recentSelected ? Color::LightGray : Color::White);
@@ -535,34 +575,76 @@ void HomeActivity::render(RenderLock&&) {
   if (recentSelected) {
     renderer.drawRoundedRect(recentX + 2, topY + 2, cardWidth - 4, topCardHeight - 4, 1, 7, true);
   }
-  renderer.drawText(UI_12_FONT_ID, recentX + 8, topY + 8, tr(STR_MENU_RECENT_BOOKS), true, EpdFontFamily::BOLD);
 
-  const int rowTop = topY + 30;
-  const int rowHeight = 28;
-  for (int i = 0; i < 4; ++i) {
-    const int y = rowTop + i * rowHeight;
-    if (y + rowHeight > topY + topCardHeight - 6) {
+  std::string recentsHeader =
+      renderer.truncatedText(UI_12_FONT_ID, tr(STR_MENU_RECENT_BOOKS), cardWidth - 20, EpdFontFamily::BOLD);
+  renderer.drawText(UI_12_FONT_ID, recentX + 10, topY + 8, recentsHeader.c_str(), true, EpdFontFamily::BOLD);
+
+  const int listTop = topY + 8 + renderer.getLineHeight(UI_12_FONT_ID) + 6;
+  const int titleLineH = renderer.getLineHeight(SMALL_FONT_ID);
+  constexpr int progressBarH = 3;
+  constexpr int rowItemGap = 3;
+  const int rowUnit = titleLineH * 2 + progressBarH + rowItemGap;
+  const int listAvail = topCardHeight - (listTop - topY) - 8;
+  const int rowCount = std::min(4, std::max(1, listAvail / rowUnit));
+
+  for (int row = 0; row < rowCount; ++row) {
+    const int rowY = listTop + row * rowUnit;
+    if (rowY + titleLineH > topY + topCardHeight - 4) {
       break;
     }
 
-    if (i < static_cast<int>(recentBooks.size())) {
-      const auto& book = recentBooks[i];
+    if (row < static_cast<int>(recentBooks.size())) {
+      const RecentBook& book = recentBooks[row];
       const int progress = getRecentBookProgressPercent(book);
-      std::string title = renderer.truncatedText(SMALL_FONT_ID, book.title.c_str(), cardWidth - 16);
-      renderer.drawText(SMALL_FONT_ID, recentX + 8, y, title.c_str(), true);
-      renderer.drawRect(recentX + 8, y + 12, cardWidth - 16, 6, true);
-      if (progress > 0) {
-        const int fill = std::max(1, ((cardWidth - 18) * progress) / 100);
-        renderer.fillRect(recentX + 9, y + 13, fill, 4, true);
+      const int titleAvailW = cardWidth - 20;
+
+      std::string line1;
+      std::string line2;
+      if (renderer.getTextWidth(SMALL_FONT_ID, book.title.c_str()) <= titleAvailW) {
+        line1 = book.title;
+      } else {
+        size_t fitsLen = 0;
+        for (size_t len = 1; len <= book.title.size(); ++len) {
+          if (renderer.getTextWidth(SMALL_FONT_ID, book.title.substr(0, len).c_str()) > titleAvailW) {
+            break;
+          }
+          fitsLen = len;
+        }
+
+        const size_t spacePos = book.title.rfind(' ', fitsLen > 0 ? fitsLen - 1 : 0);
+        if (spacePos != std::string::npos && spacePos > 0) {
+          line1 = book.title.substr(0, spacePos);
+          const std::string rest = book.title.substr(spacePos + 1);
+          line2 = renderer.truncatedText(SMALL_FONT_ID, rest.c_str(), titleAvailW);
+        } else {
+          line1 = renderer.truncatedText(SMALL_FONT_ID, book.title.c_str(), titleAvailW);
+        }
+      }
+
+      renderer.drawText(SMALL_FONT_ID, recentX + 10, rowY, line1.c_str(), true);
+      if (!line2.empty() && rowY + titleLineH + titleLineH <= topY + topCardHeight - 4) {
+        renderer.drawText(SMALL_FONT_ID, recentX + 10, rowY + titleLineH, line2.c_str(), true);
+      }
+
+      const int barY = rowY + titleLineH * 2 + 1;
+      const int barX = recentX + 10;
+      const int barW = cardWidth - 20;
+      if (barY + progressBarH <= topY + topCardHeight - 4) {
+        renderer.fillRect(barX, barY, barW, progressBarH, false);
+        renderer.drawRect(barX, barY, barW, progressBarH, true);
+        if (progress > 0) {
+          const int fillW = std::max(1, ((barW - 2) * progress) / 100);
+          renderer.fillRect(barX + 1, barY + 1, fillW, progressBarH - 2, true);
+        }
       }
     } else {
-      renderer.drawText(SMALL_FONT_ID, recentX + 8, y, "-", true);
+      renderer.drawText(SMALL_FONT_ID, recentX + 10, rowY, "-", true);
     }
   }
 
+  constexpr int nativeIconSize = 96;
   const int lowerY = topY + topCardHeight + metrics.verticalSpacing;
-  const int lowerCount = static_cast<int>(menuItems.size());
-  const int lowerRows = (lowerCount + 1) / 2;
   const int availForLower = pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing - lowerY;
   const int lowerCardHeight = std::max(60, (availForLower - (lowerRows - 1) * metrics.menuSpacing) / lowerRows);
   const int selectedLower = selectorIndex - 2;
@@ -574,36 +656,49 @@ void HomeActivity::render(RenderLock&&) {
     const int y = lowerY + row * (lowerCardHeight + metrics.menuSpacing);
     const bool selected = selectedLower == i;
 
-    renderer.fillRoundedRect(x, y, cardWidth, lowerCardHeight, 8, selected ? Color::LightGray : Color::White);
-    renderer.drawRoundedRect(x, y, cardWidth, lowerCardHeight, 1, 8, true);
     if (selected) {
+      renderer.fillRoundedRect(x, y, cardWidth, lowerCardHeight, 8, Color::LightGray);
+      renderer.drawRoundedRect(x, y, cardWidth, lowerCardHeight, 1, 8, true);
       renderer.drawRoundedRect(x + 2, y + 2, cardWidth - 4, lowerCardHeight - 4, 1, 7, true);
+    } else {
+      renderer.fillRoundedRect(x, y, cardWidth, lowerCardHeight, 8, Color::White);
+      renderer.drawRoundedRect(x, y, cardWidth, lowerCardHeight, 1, 8, true);
     }
+
+    const int labelH = renderer.getLineHeight(UI_12_FONT_ID);
+    std::string label = renderer.truncatedText(UI_12_FONT_ID, menuItems[i], cardWidth - 16, EpdFontFamily::BOLD);
+    const int labelW = renderer.getTextWidth(UI_12_FONT_ID, label.c_str(), EpdFontFamily::BOLD);
+    const int labelY = y + 8;
+    renderer.fillRectDither(x + 6, labelY - 1, cardWidth - 12, labelH + 2,
+                            selected ? Color::LightGray : Color::White);
+    renderer.drawText(UI_12_FONT_ID, x + (cardWidth - labelW) / 2, labelY, label.c_str(), true,
+                      EpdFontFamily::BOLD);
 
     const uint8_t* icon = BookIcon;
     switch (menuIcons[i]) {
       case Folder:
-        icon = FolderIcon;
+        icon = Folder2Icon;
         break;
       case Transfer:
-        icon = TransferIcon;
+        icon = Wifi_wideIcon;
         break;
       case Settings:
-        icon = SettingsIcon;
+        icon = CogIcon;
         break;
       case Library:
         icon = LibraryIcon;
         break;
-      case Recent:
       case Book:
+        icon = GameIcon;
+        break;
+      case Recent:
       default:
         icon = BookIcon;
         break;
     }
 
-    renderer.drawIcon(icon, x + 8, y + (lowerCardHeight - 32) / 2, 32, 32);
-    std::string label = renderer.truncatedText(UI_10_FONT_ID, menuItems[i], cardWidth - 52, EpdFontFamily::BOLD);
-    renderer.drawText(UI_10_FONT_ID, x + 48, y + (lowerCardHeight / 2) - 6, label.c_str(), true, EpdFontFamily::BOLD);
+    const int iconY = y + labelH + 10 + std::max(0, (lowerCardHeight - labelH - 18 - nativeIconSize) / 2);
+    renderer.drawIcon(icon, x + (cardWidth - nativeIconSize) / 2, iconY, nativeIconSize, nativeIconSize);
   }
 
   const auto labels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
@@ -615,7 +710,7 @@ void HomeActivity::render(RenderLock&&) {
     requestUpdate();
   } else if (!recentsLoaded && !recentsLoading) {
     recentsLoading = true;
-    loadRecentCovers(topCardHeight);
+    loadRecentCovers(cardsPreviewCoverHeight);
   }
 }
 

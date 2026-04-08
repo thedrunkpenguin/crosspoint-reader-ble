@@ -820,8 +820,17 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   }
   const auto tDisplay = millis();
 
-  // Save bw buffer to reset buffer state after grayscale data sync
-  renderer.storeBwBuffer();
+  // Save BW buffer only when the grayscale AA pass needs it. When BLE is connected,
+  // the extra scratch copy can fail under runtime memory pressure; if that happens
+  // we fall back to re-rendering the BW frame after the grayscale overlay so the
+  // next FAST_REFRESH still compares against the correct previous page.
+  bool bwBufferStored = false;
+  if (SETTINGS.textAntiAliasing) {
+    bwBufferStored = renderer.storeBwBuffer();
+    if (!bwBufferStored) {
+      LOG_ERR("ERS", "AA fallback: BW buffer store failed, free heap=%lu", esp_get_free_heap_size());
+    }
+  }
   const auto tBwStore = millis();
 
   // grayscale rendering
@@ -846,8 +855,18 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     renderer.setRenderMode(GfxRenderer::BW);
     fcm->logStats("gray");
 
-    // restore the bw data
-    renderer.restoreBwBuffer();
+    // Restore the BW frame for the next differential refresh. If the temporary
+    // copy failed (e.g. BLE reduced available heap), rebuild the page into the
+    // framebuffer and sync RED RAM from that instead of leaving grayscale data
+    // behind for the next FAST_REFRESH.
+    if (bwBufferStored) {
+      renderer.restoreBwBuffer();
+    } else {
+      renderer.clearScreen();
+      page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
+      renderStatusBar();
+      renderer.cleanupGrayscaleWithFrameBuffer();
+    }
     const auto tBwRestore = millis();
 
     const auto tEnd = millis();
@@ -857,15 +876,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
             tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tBwStore - tDisplay, tGrayLsb - tBwStore,
             tGrayMsb - tGrayLsb, tGrayDisplay - tGrayMsb, tBwRestore - tGrayDisplay, tEnd - t0);
   } else {
-    // restore the bw data
-    renderer.restoreBwBuffer();
-    const auto tBwRestore = millis();
-
     const auto tEnd = millis();
-    LOG_DBG("ERS",
-            "Page render: prewarm=%lums bw_render=%lums display=%lums bw_store=%lums bw_restore=%lums total=%lums",
-            tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tBwStore - tDisplay, tBwRestore - tBwStore,
-            tEnd - t0);
+    LOG_DBG("ERS", "Page render: prewarm=%lums bw_render=%lums display=%lums total=%lums",
+            tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tEnd - t0);
   }
 }
 

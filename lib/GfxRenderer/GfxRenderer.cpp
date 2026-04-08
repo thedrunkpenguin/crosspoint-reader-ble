@@ -583,28 +583,35 @@ void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, con
 void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, const int maxWidth, const int maxHeight,
                              const float cropX, const float cropY) const {
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
-  // For 1-bit bitmaps, use optimized 1-bit rendering path (no crop support for 1-bit)
-  if (bitmap.is1Bit() && cropX == 0.0f && cropY == 0.0f) {
+
+  const float visibleWidth = (1.0f - cropX) * bitmap.getWidth();
+  const float visibleHeight = (1.0f - cropY) * bitmap.getHeight();
+  const bool needsUpscale = (maxWidth > 0 && visibleWidth < maxWidth) || (maxHeight > 0 && visibleHeight < maxHeight);
+
+  // For 1-bit bitmaps, use the optimized path when no crop or enlargement is needed.
+  if (bitmap.is1Bit() && cropX == 0.0f && cropY == 0.0f && !needsUpscale) {
     drawBitmap1Bit(bitmap, x, y, maxWidth, maxHeight);
     return;
   }
 
   float scale = 1.0f;
-  bool isScaled = false;
   int cropPixX = std::floor(bitmap.getWidth() * cropX / 2.0f);
   int cropPixY = std::floor(bitmap.getHeight() * cropY / 2.0f);
   LOG_DBG("GFX", "Cropping %dx%d by %dx%d pix, is %s", bitmap.getWidth(), bitmap.getHeight(), cropPixX, cropPixY,
           bitmap.isTopDown() ? "top-down" : "bottom-up");
 
-  if (maxWidth > 0 && (1.0f - cropX) * bitmap.getWidth() > maxWidth) {
-    scale = static_cast<float>(maxWidth) / static_cast<float>((1.0f - cropX) * bitmap.getWidth());
-    isScaled = true;
+  const float scaleW = maxWidth > 0 ? static_cast<float>(maxWidth) / std::max(1.0f, visibleWidth) : 1.0f;
+  const float scaleH = maxHeight > 0 ? static_cast<float>(maxHeight) / std::max(1.0f, visibleHeight) : 1.0f;
+  if (maxWidth > 0 && maxHeight > 0) {
+    scale = std::min(scaleW, scaleH);
+  } else if (maxWidth > 0) {
+    scale = scaleW;
+  } else if (maxHeight > 0) {
+    scale = scaleH;
   }
-  if (maxHeight > 0 && (1.0f - cropY) * bitmap.getHeight() > maxHeight) {
-    scale = std::min(scale, static_cast<float>(maxHeight) / static_cast<float>((1.0f - cropY) * bitmap.getHeight()));
-    isScaled = true;
-  }
-  LOG_DBG("GFX", "Scaling by %f - %s", scale, isScaled ? "scaled" : "not scaled");
+  const bool isScaled = std::fabs(scale - 1.0f) > 0.001f;
+  const bool isUpscaled = scale > 1.001f;
+  LOG_DBG("GFX", "Scaling by %f - %s", scale, isScaled ? (isUpscaled ? "upscaled" : "scaled") : "not scaled");
 
   // Calculate output row size (2 bits per pixel, packed into bytes)
   // IMPORTANT: Use int, not uint8_t, to avoid overflow for images > 1020 pixels wide
@@ -622,11 +629,25 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
   for (int bmpY = 0; bmpY < (bitmap.getHeight() - cropPixY); bmpY++) {
     // The BMP's (0, 0) is the bottom-left corner (if the height is positive, top-left if negative).
     // Screen's (0, 0) is the top-left corner.
-    int screenY = -cropPixY + (bitmap.isTopDown() ? bmpY : bitmap.getHeight() - 1 - bmpY);
-    if (isScaled) {
-      screenY = std::floor(screenY * scale);
+    const int bmpDisplayY = bitmap.isTopDown() ? bmpY : bitmap.getHeight() - 1 - bmpY;
+    if (bmpDisplayY < cropPixY || bmpDisplayY >= bitmap.getHeight() - cropPixY) {
+      if (bitmap.readNextRow(outputRow, rowBytes) != BmpReaderError::Ok) {
+        LOG_ERR("GFX", "Failed to read row %d from bitmap", bmpY);
+        free(outputRow);
+        free(rowBytes);
+        return;
+      }
+      continue;
     }
-    screenY += y;  // the offset should not be scaled
+
+    const int visibleY = bmpDisplayY - cropPixY;
+    int screenY = isScaled ? std::floor(visibleY * scale) : visibleY;
+    int screenYEnd = screenY + 1;
+    if (isUpscaled) {
+      screenYEnd = std::max(screenY + 1, static_cast<int>(std::floor((visibleY + 1) * scale)));
+    }
+    screenY += y;
+    screenYEnd += y;
     if (screenY >= getScreenHeight()) {
       break;
     }
@@ -638,36 +659,45 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
       return;
     }
 
-    if (screenY < 0) {
-      continue;
-    }
-
-    if (bmpY < cropPixY) {
-      // Skip the row if it's outside the crop area
+    if (screenYEnd <= 0) {
       continue;
     }
 
     for (int bmpX = cropPixX; bmpX < bitmap.getWidth() - cropPixX; bmpX++) {
-      int screenX = bmpX - cropPixX;
-      if (isScaled) {
-        screenX = std::floor(screenX * scale);
+      const int visibleX = bmpX - cropPixX;
+      int screenX = isScaled ? std::floor(visibleX * scale) : visibleX;
+      int screenXEnd = screenX + 1;
+      if (isUpscaled) {
+        screenXEnd = std::max(screenX + 1, static_cast<int>(std::floor((visibleX + 1) * scale)));
       }
-      screenX += x;  // the offset should not be scaled
+      screenX += x;
+      screenXEnd += x;
       if (screenX >= getScreenWidth()) {
         break;
       }
-      if (screenX < 0) {
+      if (screenXEnd <= 0) {
         continue;
       }
 
       const uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
+      if ((renderMode == BW && val >= 3) || (renderMode == GRAYSCALE_MSB && !(val == 1 || val == 2)) ||
+          (renderMode == GRAYSCALE_LSB && val != 1)) {
+        continue;
+      }
 
-      if (renderMode == BW && val < 3) {
-        drawPixel(screenX, screenY);
-      } else if (renderMode == GRAYSCALE_MSB && (val == 1 || val == 2)) {
-        drawPixel(screenX, screenY, false);
-      } else if (renderMode == GRAYSCALE_LSB && val == 1) {
-        drawPixel(screenX, screenY, false);
+      const int clippedX0 = std::max(0, screenX);
+      const int clippedX1 = std::min(getScreenWidth(), screenXEnd);
+      const int clippedY0 = std::max(0, screenY);
+      const int clippedY1 = std::min(getScreenHeight(), screenYEnd);
+
+      for (int yy = clippedY0; yy < clippedY1; ++yy) {
+        for (int xx = clippedX0; xx < clippedX1; ++xx) {
+          if (renderMode == BW) {
+            drawPixel(xx, yy);
+          } else {
+            drawPixel(xx, yy, false);
+          }
+        }
       }
     }
   }
@@ -1164,6 +1194,7 @@ void GfxRenderer::restoreBwBuffer() {
   }
 
   if (missingChunks) {
+    LOG_ERR("GFX", "Cannot restore BW buffer: one or more chunks are missing");
     freeBwBufferChunks();
     return;
   }

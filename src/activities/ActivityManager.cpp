@@ -1,6 +1,7 @@
 #include "ActivityManager.h"
 
 #include <HalPowerManager.h>
+#include <esp_random.h>
 
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
@@ -14,6 +15,7 @@
 #include "settings/SettingsActivity.h"
 #include "CrossPointSettings.h"
 #include "game/GameActivity.h"
+#include "game/GamePickerActivity.h"
 #include "game/GameTitleActivity.h"
 #include "util/FullScreenMessageActivity.h"
 
@@ -202,12 +204,15 @@ void ActivityManager::goToGame() {
     return;
   }
 
-  replaceActivity(std::make_unique<GameTitleActivity>(
+  replaceActivity(std::make_unique<GamePickerActivity>(
       renderer, mappedInput,
+      [this]() { goHome(); },
       [this]() {
-        replaceActivity(std::make_unique<GameActivity>(renderer, mappedInput, [] { activityManager.goHome(); }));
-      },
-      [this]() { goHome(); }));
+        if (!GAME_STATE.hasSaveFile()) {
+          GAME_STATE.newGame(esp_random());
+        }
+        replaceActivity(std::make_unique<GameActivity>(renderer, mappedInput, [] { activityManager.goToGame(); }));
+      }));
 }
 
 void ActivityManager::goToSleep() {
