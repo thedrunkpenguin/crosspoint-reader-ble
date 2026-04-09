@@ -801,7 +801,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
   // Force special handling for pages with images when anti-aliasing is on
   bool imagePageWithAA = page->hasImages() && SETTINGS.textAntiAliasing;
-  const bool statusBarNeedsPreclear = ReaderUtils::hasDynamicStatusBarContent();
+  const int currentPageForStatus = section ? section->currentPage + 1 : 0;
+  const int pageCountForStatus = section ? section->pageCount : 0;
+  const float chapterProgressForStatus =
+      (pageCountForStatus > 0) ? (static_cast<float>(currentPageForStatus) / pageCountForStatus) : 0.0f;
+  const float bookProgressForStatus =
+      (epub && pageCountForStatus > 0) ? epub->calculateProgress(currentSpineIndex, chapterProgressForStatus) * 100.0f
+                                       : 0.0f;
+  const bool bleCounterRefresh = ReaderUtils::shouldStrengthenBleStatusCounterRefresh(pagesUntilFullRefresh);
 
   page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
   renderStatusBar();
@@ -809,17 +816,18 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const auto tBwRender = millis();
 
   if (imagePageWithAA) {
-    // Double FAST_REFRESH with selective blanking:
-    // Step 1 actively drives the image area and status bar band white to clear old content.
-    // Step 2 redraws the new image and current page number cleanly.
+    // Double FAST_REFRESH with selective image blanking (pablohc's technique):
+    // HALF_REFRESH sets particles too firmly for the grayscale LUT to adjust.
+    // Instead, blank only the image area and do two fast refreshes.
+    // Step 1: Display page with image area blanked (text appears, image area white)
+    // Step 2: Re-render with images and display again (images appear clean)
     int16_t imgX, imgY, imgW, imgH;
     if (page->getImageBoundingBox(imgX, imgY, imgW, imgH)) {
-      if (statusBarNeedsPreclear) {
-        ReaderUtils::clearStatusBarBand(renderer, orientedMarginBottom);
-      }
       renderer.fillRect(imgX + orientedMarginLeft, imgY + orientedMarginTop, imgW, imgH, false);
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 
+      // Re-render page content to restore images into the blanked area.
+      // Re-draw the status bar so the final BW frame stays fully in sync.
       page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
       renderStatusBar();
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
@@ -827,16 +835,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     }
     // Double FAST_REFRESH handles ghosting for image pages; don't count toward full refresh cadence
-  } else if (ReaderUtils::shouldPreclearStatusBarBeforeFastRefresh(pagesUntilFullRefresh)) {
-    ReaderUtils::clearStatusBarBand(renderer, orientedMarginBottom);
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-
-    page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
-    renderStatusBar();
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-    pagesUntilFullRefresh--;
   } else {
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+  }
+
+  if (bleCounterRefresh) {
+    ReaderUtils::refreshStatusBarCounterWindow(renderer, bookProgressForStatus, currentPageForStatus,
+                                               pageCountForStatus);
   }
   const auto tDisplay = millis();
 
