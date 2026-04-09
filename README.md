@@ -37,6 +37,7 @@ This project is **not affiliated with Xteink**; it's built as a community projec
 - [x] Wifi book upload
 - [x] Wifi OTA updates
 - [x] KOReader Sync integration for cross-device reading progress
+- [x] Personal/experimental games build with `Deep Mines`, `Solitaire`, and `Space Invaders`
 - [x] Configurable font, layout, and display options
   - [ ] User provided fonts
   - [ ] Full UTF support
@@ -48,6 +49,23 @@ See [the user guide](./USER_GUIDE.md) for instructions on operating CrossPoint, 
 [KOReader Sync quick setup](./USER_GUIDE.md#365-koreader-sync-quick-setup).
 
 For more details about the scope of the project, see the [SCOPE.md](SCOPE.md) document.
+
+### Personal build game controls
+
+The personal firmware build includes a small `Games` menu with `Deep Mines`, `Solitaire`, and `Space Invaders`.
+
+#### Space Invaders
+- `Left / Right` — move the ship
+- `Confirm` — fire
+- `Back` — exit the game
+- Clear each wave to advance through the difficulty levels
+
+#### Solitaire
+- `Down` — draw a card from the stock pile
+- `Up` — focus or unfocus the waste pile
+- `Left / Right` — choose the destination tableau column
+- `Confirm` — move the selected waste card or the selected tableau card
+- `Back` — exit the game
 
 ## Installing
 
@@ -174,6 +192,15 @@ principles, please see [GOVERNANCE.md](GOVERNANCE.md).
 ---
 
 CrossPoint Reader is **not affiliated with Xteink or any manufacturer of the X4 hardware**.
+
+## Credits and attribution
+
+The `Space Invaders` personal-build addition was integrated into this firmware with **GitHub Copilot** assistance, but the gameplay/code credit for the original referenced implementations belongs to the original authors:
+
+- [**PixelRoot32** — `PixelRoot32-Game-Engine` Space Invaders example](https://github.com/PixelRoot32-Game-Engine/PixelRoot32-Game-Engine/tree/main/examples%2Fspace_invaders)
+- [**Joel-Mendez0** — `SpaceInvadersESP32`](https://github.com/Joel-Mendez0/SpaceInvadersESP32)
+
+This repository's personal build adapts those ideas for the CrossPoint device; credit for the original game work remains with those authors.
 
 Huge shoutout to [**diy-esp32-epub-reader** by atomic14](https://github.com/atomic14/diy-esp32-epub-reader), which was a project I took a lot of inspiration from as I
 was making CrossPoint.

@@ -8,10 +8,11 @@
 #include "MappedInputManager.h"
 #include "RPGActivity.h"
 #include "SolitaireActivity.h"
+#include "SpaceInvadersActivity.h"
 #include "components/UITheme.h"
 
 int GamePickerActivity::gameCount() const {
-  return 3;
+  return 4;
 }
 
 void GamePickerActivity::onEnter() {
@@ -38,6 +39,11 @@ void GamePickerActivity::openSelectedGame() {
                              onReturnToPicker);
       break;
     case 2:
+      startActivityForResult(
+          std::make_unique<SpaceInvadersActivity>(renderer, mappedInput, [] { activityManager.popActivity(); }),
+          onReturnToPicker);
+      break;
+    case 3:
       startActivityForResult(std::make_unique<RPGActivity>(renderer, mappedInput, [] { activityManager.popActivity(); }),
                              onReturnToPicker);
       break;
@@ -94,20 +100,26 @@ void GamePickerActivity::render(RenderLock&&) {
       case 0:
         return std::string(I18N.get(StrId::STR_DEEP_MINES));
       case 1:
-        return std::string("Solitaire");
+        return std::string(I18N.get(StrId::STR_SOLITAIRE));
       case 2:
-        return std::string("Fantasy RPG");
+        return std::string(I18N.get(StrId::STR_SPACE_INVADERS));
+      case 3:
+        return std::string(I18N.get(StrId::STR_FANTASY_RPG));
       default:
         return std::string();
     }
   };
   const std::function<std::string(int)> rowSubtitle = [](int index) {
-    if (index == 1) {
-      return std::string("Klondike Solitaire");
-    } else if (index == 2) {
-      return std::string("Medieval Fantasy");
+    switch (index) {
+      case 1:
+        return std::string(I18N.get(StrId::STR_SOLITAIRE_DESC));
+      case 2:
+        return std::string(I18N.get(StrId::STR_SPACE_INVADERS_DESC));
+      case 3:
+        return std::string(I18N.get(StrId::STR_FANTASY_RPG_DESC));
+      default:
+        return std::string();
     }
-    return std::string();
   };
   const std::function<UIIcon(int)> rowIcon = [](int) { return UIIcon::Book; };
 
