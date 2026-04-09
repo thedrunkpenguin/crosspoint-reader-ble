@@ -863,6 +863,11 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
   display.displayBuffer(refreshMode, fadingFix);
 }
 
+void GfxRenderer::displayWindow(const int x, const int y, const int width, const int height,
+                                const HalDisplay::RefreshMode refreshMode) const {
+  display.displayWindow(x, y, width, height, refreshMode, fadingFix);
+}
+
 std::string GfxRenderer::truncatedText(const int fontId, const char* text, const int maxWidth,
                                        const EpdFontFamily::Style style) const {
   if (!text || maxWidth <= 0) return "";

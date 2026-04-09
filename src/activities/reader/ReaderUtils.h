@@ -7,6 +7,7 @@
 
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
+#include "fontIds.h"
 
 namespace ReaderUtils {
 
@@ -59,27 +60,63 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   return {prev, next};
 }
 
-inline bool hasDynamicStatusBarContent() {
-  return SETTINGS.statusBarChapterPageCount || SETTINGS.statusBarBookProgressPercentage ||
-         SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
+inline bool shouldStrengthenBleStatusCounterRefresh(int pagesUntilFullRefresh) {
+  return pagesUntilFullRefresh > 1 && (SETTINGS.statusBarChapterPageCount || SETTINGS.statusBarBookProgressPercentage) &&
+         BluetoothHIDManager::getInstance().hadRecentFree2Input();
 }
 
-inline bool shouldPreclearStatusBarBeforeFastRefresh(int pagesUntilFullRefresh) {
-  return hasDynamicStatusBarContent() && pagesUntilFullRefresh > 1;
-}
-
-inline void clearStatusBarBand(const GfxRenderer& renderer, int orientedMarginBottom, int paddingBottom = 0) {
-  const int statusBarHeight = UITheme::getInstance().getStatusBarHeight();
-  if (statusBarHeight <= 0) {
+inline void refreshStatusBarCounterWindow(const GfxRenderer& renderer, float bookProgress, int currentPage,
+                                          int pageCount) {
+  if (!(SETTINGS.statusBarChapterPageCount || SETTINGS.statusBarBookProgressPercentage)) {
     return;
   }
 
-  const int extraMargin = UITheme::getInstance().getMetrics().statusBarVerticalMargin + 8;
-  int clearY = renderer.getScreenHeight() - orientedMarginBottom - paddingBottom - statusBarHeight - extraMargin;
-  if (clearY < 0) {
-    clearY = 0;
+  auto metrics = UITheme::getInstance().getMetrics();
+  int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
+  renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
+                                   &orientedMarginLeft);
+
+  char progressStr[32] = {};
+  if (SETTINGS.statusBarBookProgressPercentage && SETTINGS.statusBarChapterPageCount) {
+    snprintf(progressStr, sizeof(progressStr), "%d/%d  %.0f%%", currentPage, pageCount, bookProgress);
+  } else if (SETTINGS.statusBarBookProgressPercentage) {
+    snprintf(progressStr, sizeof(progressStr), "%.0f%%", bookProgress);
+  } else {
+    snprintf(progressStr, sizeof(progressStr), "%d/%d", currentPage, pageCount);
   }
-  renderer.fillRect(0, clearY, renderer.getScreenWidth(), renderer.getScreenHeight() - clearY, false);
+
+  const int progressTextWidth = renderer.getTextWidth(SMALL_FONT_ID, progressStr);
+  if (progressTextWidth <= 0) {
+    return;
+  }
+
+  const int statusBarHeight = UITheme::getInstance().getStatusBarHeight();
+  const int progressTextX =
+      renderer.getScreenWidth() - metrics.statusBarHorizontalMargin - orientedMarginRight - progressTextWidth;
+  int refreshX = progressTextX - 12;
+  int refreshY = renderer.getScreenHeight() - statusBarHeight - orientedMarginBottom - 8;
+  if (refreshY < 0) {
+    refreshY = 0;
+  }
+
+  refreshX &= ~0x7;  // byte-align for displayWindow
+  if (refreshX < 0) {
+    refreshX = 0;
+  }
+
+  int refreshWidth = renderer.getScreenWidth() - refreshX - orientedMarginRight;
+  refreshWidth = (refreshWidth + 7) & ~0x7;
+  if (refreshX + refreshWidth > renderer.getScreenWidth()) {
+    refreshWidth = renderer.getScreenWidth() - refreshX;
+    refreshWidth &= ~0x7;
+  }
+
+  const int refreshHeight = renderer.getScreenHeight() - refreshY;
+  if (refreshWidth <= 0 || refreshHeight <= 0) {
+    return;
+  }
+
+  renderer.displayWindow(refreshX, refreshY, refreshWidth, refreshHeight, HalDisplay::FAST_REFRESH);
 }
 
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
