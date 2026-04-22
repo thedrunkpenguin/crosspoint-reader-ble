@@ -956,20 +956,23 @@ void GolfZeroActivity::drawGrid(const HoleDef& hole) {
         renderer.drawLine(px - s / 4, py + s, px + s / 2, py, 2, true);
         renderer.drawLine(px + s / 4, py + s / 2, px + s, py - s / 2, 2, true);
       } else if (t == Terrain::Water) {
-        const int ws = s + 3;
-        // Very light fill so it is visibly lighter than fairway/green.
-        fillHexCellPattern(px, py, ws, 7);
-        renderer.drawRoundedRect(px - ws, py - ws, ws * 2, ws * 2, 1, std::max(2, ws / 2), true);
-        // Add wave marks for quick water recognition.
-        const int wx0 = px - ws + 2;
-        const int wx1 = px + ws - 3;
-        for (int wx = wx0; wx + 4 <= wx1; wx += 5) {
-          renderer.drawLine(wx, py - 3, wx + 2, py - 4, 2, true);
-          renderer.drawLine(wx + 2, py - 4, wx + 4, py - 3, 2, true);
-          renderer.drawLine(wx, py, wx + 2, py - 1, 2, true);
-          renderer.drawLine(wx + 2, py - 1, wx + 4, py, 2, true);
-          renderer.drawLine(wx, py + 3, wx + 2, py + 2, 2, true);
-          renderer.drawLine(wx + 2, py + 2, wx + 4, py + 3, 2, true);
+        // Water uses a larger stylized crest/trough motif over the plain tile.
+        const int rx = std::max(3, cellSize - 1);
+        const int ry = std::max(3, (cellSize * 866) / 1000 - 1);
+        const int waveRows[2] = {-ry / 3, ry / 3};
+        for (int row = 0; row < 2; ++row) {
+          const int dy = waveRows[row];
+          const int ay = iabs(dy);
+          const int half = std::max(4, rx - (rx * ay) / (2 * std::max(1, ry)));
+          const int wx0 = px - half + 2;
+          const int wx1 = px + half - 11;
+          for (int wx = wx0; wx <= wx1; wx += 12) {
+            renderer.drawLine(wx, py + dy, wx + 2, py + dy - 2, 2, true);
+            renderer.drawLine(wx + 2, py + dy - 2, wx + 4, py + dy, 2, true);
+            renderer.drawLine(wx + 4, py + dy, wx + 6, py + dy, 2, true);
+            renderer.drawLine(wx + 6, py + dy, wx + 8, py + dy - 2, 2, true);
+            renderer.drawLine(wx + 8, py + dy - 2, wx + 10, py + dy, 2, true);
+          }
         }
       } else if (t == Terrain::Bridge) {
         renderer.drawLine(px - s, py - s, px + s, py + s, 2, true);
