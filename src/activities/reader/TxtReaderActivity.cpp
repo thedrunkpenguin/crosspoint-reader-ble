@@ -378,7 +378,17 @@ void TxtReaderActivity::renderPage() {
   renderLines();
   renderStatusBar();
 
-  ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+  if (ReaderUtils::shouldPreclearStatusBarBeforeFastRefresh(pagesUntilFullRefresh)) {
+    ReaderUtils::clearStatusBarBand(renderer, 0);
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+
+    renderLines();
+    renderStatusBar();
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    pagesUntilFullRefresh--;
+  } else {
+    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+  }
   if (bleCounterRefresh) {
     ReaderUtils::refreshStatusBarCounterWindow(renderer, progress, currentPage + 1, totalPages);
   }

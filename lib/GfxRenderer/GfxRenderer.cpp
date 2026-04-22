@@ -865,7 +865,70 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
 
 void GfxRenderer::displayWindow(const int x, const int y, const int width, const int height,
                                 const HalDisplay::RefreshMode refreshMode) const {
-  display.displayWindow(x, y, width, height, refreshMode, fadingFix);
+  // Transform the logical axis-aligned rect into physical display coordinates.
+  // The panel framebuffer is always 800×480 regardless of the logical orientation.
+  // Each orientation maps a logical rect to a (possibly axis-swapped) physical rect.
+  constexpr int PW = HalDisplay::DISPLAY_WIDTH;   // 800
+  constexpr int PH = HalDisplay::DISPLAY_HEIGHT;  // 480
+
+  int px, py, pw, ph;
+  switch (orientation) {
+    case LandscapeCounterClockwise:
+      // Identity mapping
+      px = x;
+      py = y;
+      pw = width;
+      ph = height;
+      break;
+    case LandscapeClockwise:
+      // 180° flip: physical top-left is logical bottom-right
+      px = PW - x - width;
+      py = PH - y - height;
+      pw = width;
+      ph = height;
+      break;
+    case Portrait:
+      // 90° CW: logical X axis → physical Y axis (inverted), logical Y axis → physical X axis
+      px = y;
+      py = PH - x - width;
+      pw = height;
+      ph = width;
+      break;
+    case PortraitInverted:
+      // 90° CCW: logical X axis → physical Y axis, logical Y axis → physical X axis (inverted)
+      px = PW - y - height;
+      py = x;
+      pw = height;
+      ph = width;
+      break;
+    default:
+      px = x;
+      py = y;
+      pw = width;
+      ph = height;
+      break;
+  }
+
+  // Byte-align physical x downward and extend pw to maintain full coverage.
+  const int alignedPx = px & ~7;
+  pw = ((px + pw + 7) & ~7) - alignedPx;
+  px = alignedPx;
+
+  // Clamp to physical display bounds.
+  if (px < 0) {
+    pw += px;
+    px = 0;
+  }
+  if (py < 0) {
+    ph += py;
+    py = 0;
+  }
+  if (px + pw > PW) pw = PW - px;
+  if (py + ph > PH) ph = PH - py;
+  if (pw <= 0 || ph <= 0) return;
+
+  display.displayWindow(static_cast<uint16_t>(px), static_cast<uint16_t>(py), static_cast<uint16_t>(pw),
+                        static_cast<uint16_t>(ph), refreshMode, fadingFix);
 }
 
 std::string GfxRenderer::truncatedText(const int fontId, const char* text, const int maxWidth,

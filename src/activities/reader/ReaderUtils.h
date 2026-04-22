@@ -60,6 +60,29 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   return {prev, next};
 }
 
+inline bool hasDynamicStatusBarContent() {
+  return SETTINGS.statusBarChapterPageCount || SETTINGS.statusBarBookProgressPercentage ||
+         SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
+}
+
+inline bool shouldPreclearStatusBarBeforeFastRefresh(int pagesUntilFullRefresh) {
+  return hasDynamicStatusBarContent() && pagesUntilFullRefresh > 1;
+}
+
+inline void clearStatusBarBand(const GfxRenderer& renderer, int orientedMarginBottom, int paddingBottom = 0) {
+  const int statusBarHeight = UITheme::getInstance().getStatusBarHeight();
+  if (statusBarHeight <= 0) {
+    return;
+  }
+
+  const int extraMargin = UITheme::getInstance().getMetrics().statusBarVerticalMargin + 8;
+  int clearY = renderer.getScreenHeight() - orientedMarginBottom - paddingBottom - statusBarHeight - extraMargin;
+  if (clearY < 0) {
+    clearY = 0;
+  }
+  renderer.fillRect(0, clearY, renderer.getScreenWidth(), renderer.getScreenHeight() - clearY, false);
+}
+
 inline bool shouldStrengthenBleStatusCounterRefresh(int pagesUntilFullRefresh) {
   return pagesUntilFullRefresh > 1 && (SETTINGS.statusBarChapterPageCount || SETTINGS.statusBarBookProgressPercentage) &&
          BluetoothHIDManager::getInstance().hadRecentFree2Input();

@@ -37,7 +37,7 @@ This project is **not affiliated with Xteink**; it's built as a community projec
 - [x] Wifi book upload
 - [x] Wifi OTA updates
 - [x] KOReader Sync integration for cross-device reading progress
-- [x] Personal/experimental games build with `Deep Mines`, `Solitaire`, and `Space Invaders`
+- [x] Personal/experimental games build with `Deep Mines`, `Solitaire`, `Space Invaders`, `Fantasy RPG`, and `Golf`
 - [x] Configurable font, layout, and display options
   - [ ] User provided fonts
   - [ ] Full UTF support
@@ -52,7 +52,7 @@ For more details about the scope of the project, see the [SCOPE.md](SCOPE.md) do
 
 ### Personal build game controls
 
-The personal firmware build includes a small `Games` menu with `Deep Mines`, `Solitaire`, and `Space Invaders`.
+The personal firmware build includes a small `Games` menu with `Deep Mines`, `Solitaire`, `Space Invaders`, `Fantasy RPG`, and `Golf`.
 
 #### Space Invaders
 - `Left / Right` — move the ship
@@ -66,6 +66,16 @@ The personal firmware build includes a small `Games` menu with `Deep Mines`, `So
 - `Left / Right` — choose the destination tableau column
 - `Confirm` — move the selected waste card or the selected tableau card
 - `Back` — exit the game
+
+#### Golf
+- `Confirm` — advance menus, roll in dice mode, and place the shot
+- `Back` — open the pause menu or exit back to Games
+- `Left / Right` — rotate the shot direction while aiming
+- `Up / Down` in Dice mode — toggle putt and reroll when available
+- `Up / Down` in Club mode — change clubs
+- `Left / Right` in Club mode while waiting to shoot — scroll the course view
+
+Golf includes six desert-themed courses with nine holes each, a dice mode, a club mode, hazards, slopes, and a scorecard for the full round.
 
 ## Installing
 
@@ -194,6 +204,13 @@ principles, please see [GOVERNANCE.md](GOVERNANCE.md).
 CrossPoint Reader is **not affiliated with Xteink or any manufacturer of the X4 hardware**.
 
 ## Credits and attribution
+
+The `Golf` personal-build addition in this firmware was inspired by tabletop paper golf designs. Credit for that inspiration belongs to:
+
+- [darrelaustindesign.etsy.com](https://darrelaustindesign.etsy.com)
+- [Gladden Design Paper Apps Golf](https://gladdendesign.com/products/paper-apps-golf)
+
+This firmware adapts that inspiration into a hex-grid e-paper implementation for the Xteink X4. Credit for the underlying paper-golf inspiration remains with those original creators.
 
 The `Space Invaders` personal-build addition was integrated into this firmware with **GitHub Copilot** assistance, but the gameplay/code credit for the original referenced implementations belongs to the original authors:
 

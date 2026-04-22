@@ -6,13 +6,14 @@
 #include <vector>
 
 #include "MappedInputManager.h"
+#include "GolfZeroActivity.h"
 #include "RPGActivity.h"
 #include "SolitaireActivity.h"
 #include "SpaceInvadersActivity.h"
 #include "components/UITheme.h"
 
 int GamePickerActivity::gameCount() const {
-  return 4;
+  return 5;
 }
 
 void GamePickerActivity::onEnter() {
@@ -46,6 +47,11 @@ void GamePickerActivity::openSelectedGame() {
     case 3:
       startActivityForResult(std::make_unique<RPGActivity>(renderer, mappedInput, [] { activityManager.popActivity(); }),
                              onReturnToPicker);
+      break;
+    case 4:
+      startActivityForResult(
+          std::make_unique<GolfZeroActivity>(renderer, mappedInput, [] { activityManager.popActivity(); }),
+          onReturnToPicker);
       break;
     default:
       break;
@@ -105,6 +111,8 @@ void GamePickerActivity::render(RenderLock&&) {
         return std::string(I18N.get(StrId::STR_SPACE_INVADERS));
       case 3:
         return std::string(I18N.get(StrId::STR_FANTASY_RPG));
+      case 4:
+        return std::string("Golf");
       default:
         return std::string();
     }
@@ -117,6 +125,8 @@ void GamePickerActivity::render(RenderLock&&) {
         return std::string(I18N.get(StrId::STR_SPACE_INVADERS_DESC));
       case 3:
         return std::string(I18N.get(StrId::STR_FANTASY_RPG_DESC));
+      case 4:
+        return std::string("Roll a d6 and draw your line to the cup");
       default:
         return std::string();
     }
