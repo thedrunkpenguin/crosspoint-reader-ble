@@ -373,25 +373,9 @@ void TxtReaderActivity::renderPage() {
   scope.endScanAndPrewarm();
 
   // BW rendering
-  const bool bleCounterRefresh = ReaderUtils::shouldStrengthenBleStatusCounterRefresh(pagesUntilFullRefresh);
-  const float progress = totalPages > 0 ? (currentPage + 1) * 100.0f / totalPages : 0.0f;
   renderLines();
   renderStatusBar();
-
-  if (ReaderUtils::shouldPreclearStatusBarBeforeFastRefresh(pagesUntilFullRefresh)) {
-    ReaderUtils::clearStatusBarBand(renderer, 0);
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-
-    renderLines();
-    renderStatusBar();
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-    pagesUntilFullRefresh--;
-  } else {
-    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
-  }
-  if (bleCounterRefresh) {
-    ReaderUtils::refreshStatusBarCounterWindow(renderer, progress, currentPage + 1, totalPages);
-  }
+  ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
   if (SETTINGS.textAntiAliasing) {
     ReaderUtils::renderAntiAliased(renderer, [&renderLines]() { renderLines(); });
