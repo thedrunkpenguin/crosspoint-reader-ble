@@ -24,6 +24,7 @@ void BluetoothSettingsActivity::onEnter() {
   learnedNextKey = 0;
   learnedReportIndex = 2;
   learnTestDeadlineMs = 0;
+  learnCaptureDebounceMs = 0;
   learnTestForwardSeen = false;
   learnTestBackSeen = false;
   learnTestForwardCount = 0;
@@ -244,6 +245,7 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
         learnedNextKey = 0;
         learnedReportIndex = 2;
         learnTestDeadlineMs = 0;
+        learnCaptureDebounceMs = 0;
         learnTestForwardSeen = false;
         learnTestBackSeen = false;
         learnTestForwardCount = 0;
@@ -314,6 +316,10 @@ void BluetoothSettingsActivity::handleMainMenuInput() {
 }
 
 void BluetoothSettingsActivity::handleLearnInput() {
+    // 600 ms cooldown after capturing WAIT_PREV so that a second HID code emitted by
+  // the same physical button press cannot race into the WAIT_NEXT slot.
+  static constexpr unsigned long LEARN_CAPTURE_COOLDOWN_MS = 600;
+
   if (pendingLearnKey != 0) {
     const uint8_t capturedKey = pendingLearnKey;
     const uint8_t capturedIndex = pendingLearnIndex;
@@ -324,6 +330,7 @@ void BluetoothSettingsActivity::handleLearnInput() {
       learnedNextKey = capturedKey;  // Wizard step 1 = forward/next
       learnedReportIndex = (capturedIndex == 0xFF) ? 2 : capturedIndex;
       learnStep = LearnStep::WAIT_NEXT;
+      learnCaptureDebounceMs = millis();
       char buf[96];
       snprintf(buf, sizeof(buf), "Forward=0x%02X @byte[%u], press BACK", learnedNextKey,
                static_cast<unsigned>(learnedReportIndex));
@@ -333,6 +340,11 @@ void BluetoothSettingsActivity::handleLearnInput() {
     }
 
     if (learnStep == LearnStep::WAIT_NEXT) {
+      // Ignore codes that arrive within the cooldown window — they are almost certainly
+      // a second keycode emitted by the same physical press that filled WAIT_PREV.
+      if (learnCaptureDebounceMs > 0 && (millis() - learnCaptureDebounceMs) < LEARN_CAPTURE_COOLDOWN_MS) {
+        return;
+      }
       if (capturedKey == learnedNextKey) {
         lastError = "Back key must be different";
         requestUpdate();
@@ -371,6 +383,23 @@ void BluetoothSettingsActivity::handleLearnInput() {
                static_cast<unsigned>(learnTestForwardCount), learnTestBackSeen ? "OK" : "--",
                static_cast<unsigned>(learnTestBackCount));
       lastError = buf;
+      requestUpdate();
+      return;
+    }
+  }
+
+  // While waiting for the back key the user can press Confirm to skip it for single-button remotes.
+  if (learnStep == LearnStep::WAIT_NEXT && mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    if (learnCaptureDebounceMs == 0 || (millis() - learnCaptureDebounceMs) >= LEARN_CAPTURE_COOLDOWN_MS) {
+      // 0xFF is a sentinel meaning "no back key" — mapKeycodeToButton never emits 0xFF keycodes.
+      learnedPrevKey = 0xFF;
+      learnStep = LearnStep::WAIT_TEST;
+      learnTestDeadlineMs = millis() + 10000;
+      learnTestForwardSeen = false;
+      learnTestBackSeen = false;
+      learnTestForwardCount = 0;
+      learnTestBackCount = 0;
+      lastError = "Single-button: test forward key, then Confirm to save";
       requestUpdate();
       return;
     }
@@ -765,7 +794,7 @@ void BluetoothSettingsActivity::renderLearnKeys() {
 
   const char* stepText = "Press FORWARD button";
   if (learnStep == LearnStep::WAIT_NEXT) {
-    stepText = "Press BACK button";
+    stepText = "Press BACK (or Select to skip)";
   } else if (learnStep == LearnStep::WAIT_TEST) {
     stepText = "Test both buttons (10s)";
   } else if (learnStep == LearnStep::DONE) {
@@ -807,7 +836,8 @@ void BluetoothSettingsActivity::renderLearnKeys() {
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK),
-                        (learnStep == LearnStep::DONE || learnStep == LearnStep::WAIT_TEST)
+                         (learnStep == LearnStep::DONE || learnStep == LearnStep::WAIT_TEST ||
+                         learnStep == LearnStep::WAIT_NEXT)
                           ? tr(STR_SELECT)
                           : "",
                                             "", "");
