@@ -34,6 +34,7 @@ class BluetoothSettingsActivity : public Activity {
   uint8_t learnedPrevKey = 0;
   uint8_t learnedNextKey = 0;
   uint8_t learnedReportIndex = 2;
+  unsigned long learnCaptureDebounceMs = 0; 
   unsigned long learnTestDeadlineMs = 0;
   bool learnTestForwardSeen = false;
   bool learnTestBackSeen = false;
