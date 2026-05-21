@@ -8,12 +8,12 @@
 #include <string>
 #include <vector>
 
-#include "../FootnoteEntry.h"
-#include "../ParsedText.h"
-#include "../blocks/ImageBlock.h"
-#include "../blocks/TextBlock.h"
-#include "../css/CssParser.h"
-#include "../css/CssStyle.h"
+#include "Epub/FootnoteEntry.h"
+#include "Epub/ParsedText.h"
+#include "Epub/blocks/ImageBlock.h"
+#include "Epub/blocks/TextBlock.h"
+#include "Epub/css/CssParser.h"
+#include "Epub/css/CssStyle.h"
 
 class Page;
 class GfxRenderer;
@@ -54,7 +54,6 @@ class ChapterHtmlSlimParser {
   std::string contentBase;
   std::string imageBasePath;
   int imageCounter = 0;
-  bool hadSupportedImageFailure = false;
 
   // Style tracking (replaces depth-based approach)
   struct StyleStackEntry {
@@ -132,5 +131,4 @@ class ChapterHtmlSlimParser {
   bool parseAndBuildPages();
   void addLineToPage(std::shared_ptr<TextBlock> line);
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
-  bool hadSupportedImageFailureDuringParse() const { return hadSupportedImageFailure; }
 };

@@ -11,9 +11,9 @@
 
 #include "MappedInputManager.h"
 #include "NetworkModeSelectionActivity.h"
+#include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
 #include "activities/network/CalibreConnectActivity.h"
-#include "activities/network/SubredditActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/QrUtils.h"
@@ -76,36 +76,16 @@ void CrossPointWebServerActivity::onExit() {
 
   state = WebServerActivityState::SHUTTING_DOWN;
 
-  // Stop the web server first (before disconnecting WiFi)
-  stopWebServer();
-
-  // Stop mDNS
-  MDNS.end();
-
-  // Stop DNS server if running (AP mode)
-  if (dnsServer) {
-    LOG_DBG("WEBACT", "Stopping DNS server...");
-    dnsServer->stop();
-    delete dnsServer;
-    dnsServer = nullptr;
+  // Skip reboot if WiFi was never activated (e.g. user backed out of mode selection).
+  if (WiFi.getMode() != WIFI_MODE_NULL) {
+    if (isApMode) {
+      WiFi.softAPdisconnect(true);
+    } else {
+      WiFi.disconnect(false);
+    }
+    delay(30);
+    silentRestart();
   }
-
-  // Brief wait for LWIP stack to flush pending packets
-  delay(50);
-
-  // Disconnect WiFi gracefully
-  if (isApMode) {
-    LOG_DBG("WEBACT", "Stopping WiFi AP...");
-    WiFi.softAPdisconnect(true);
-  } else {
-    LOG_DBG("WEBACT", "Disconnecting WiFi (graceful)...");
-    WiFi.disconnect(false);  // false = don't erase credentials, send disconnect frame
-  }
-  delay(30);  // Allow disconnect frame to be sent
-
-  LOG_DBG("WEBACT", "Setting WiFi mode OFF...");
-  WiFi.mode(WIFI_OFF);
-  delay(30);  // Allow WiFi hardware to power down
 
   LOG_DBG("WEBACT", "Free heap at onExit end: %d bytes", ESP.getFreeHeap());
 }
@@ -116,8 +96,6 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
     modeName = "Connect to Calibre";
   } else if (mode == NetworkMode::CREATE_HOTSPOT) {
     modeName = "Create Hotspot";
-  } else if (mode == NetworkMode::SUBREDDIT_READER) {
-    modeName = "Subreddit Reader";
   }
   LOG_DBG("WEBACT", "Network mode selected: %s", modeName);
 
@@ -138,21 +116,6 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
                                    }
                                  });
         });
-    return;
-  }
-
-  if (mode == NetworkMode::SUBREDDIT_READER) {
-    state = WebServerActivityState::MODE_SELECTION;
-    startActivityForResult(std::make_unique<SubredditActivity>(renderer, mappedInput), [this](const ActivityResult&) {
-      startActivityForResult(std::make_unique<NetworkModeSelectionActivity>(renderer, mappedInput),
-                             [this](const ActivityResult& result) {
-                               if (result.isCancelled) {
-                                 onGoHome();
-                               } else {
-                                 onNetworkModeSelected(std::get<NetworkModeResult>(result.data).mode);
-                               }
-                             });
-    });
     return;
   }
 
@@ -286,15 +249,6 @@ void CrossPointWebServerActivity::startWebServer() {
     // Go back on error
     onGoHome();
   }
-}
-
-void CrossPointWebServerActivity::stopWebServer() {
-  if (webServer && webServer->isRunning()) {
-    LOG_DBG("WEBACT", "Stopping web server...");
-    webServer->stop();
-    LOG_DBG("WEBACT", "Web server stopped");
-  }
-  webServer.reset();
 }
 
 void CrossPointWebServerActivity::loop() {
